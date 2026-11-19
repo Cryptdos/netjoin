@@ -133,7 +133,7 @@ dialog p{margin:0}
 .menu summary{list-style:none}
 .menu summary::-webkit-details-marker{display:none}
 .menu[aria-disabled="true"] summary{opacity:.5;cursor:not-allowed}
-.menu-list{position:absolute;right:0;top:calc(100% + 4px);z-index:20;min-width:300px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 28px rgba(0,0,0,.14);padding:6px;display:flex;flex-direction:column}
+.menu-list{position:absolute;right:0;top:calc(100% + 4px);z-index:20;overflow-y:auto;min-width:300px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 28px rgba(0,0,0,.14);padding:6px;display:flex;flex-direction:column}
 .menu-list button{display:flex;flex-direction:column;align-items:flex-start;gap:2px;border:0;background:none;font:inherit;text-align:left;padding:8px 10px;border-radius:6px;cursor:pointer}
 .menu-list button:hover:not(:disabled){background:var(--bg)}
 .menu-list button:disabled{opacity:.55;cursor:not-allowed}
@@ -215,4 +215,40 @@ table.dev td.small{min-width:110px}
   .two{grid-template-columns:1fr}
   dialog form,dialog .dlg{padding:16px}
   .menu-list{right:auto;left:0;min-width:min(300px,86vw)}
+}
+
+/* ---------- Dashboard layout: the window doesn't scroll, the panels do ---------- */
+@media (min-width: 1181px) and (min-height: 520px){
+  html,body{height:100%}
+  body{height:100vh;min-height:0;overflow:hidden}
+  /* one-line top bar: the status box and adapter picker give way first */
+  .topbar{flex-wrap:nowrap;gap:12px;padding:8px 16px}
+  .topbar>*{flex-shrink:0}
+  .field-inline{flex:0 1 300px;min-width:150px}
+  .current{flex:0 1 auto;min-width:0;flex-wrap:nowrap;overflow:hidden;white-space:nowrap;padding:4px 10px}
+  .current>*{flex-shrink:0}
+  .current .cur-mode{flex-shrink:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+  #ver{white-space:nowrap}
+  /* compact network header */
+  .body{flex:1 1 auto;min-height:0;flex-wrap:nowrap;align-items:stretch;padding:12px;gap:12px;overflow:auto}
+  .main,.lower{gap:12px}
+  .panel{padding:12px 16px}
+  #detail h1{font-size:20px}
+  .tiles{margin-top:10px;gap:10px}
+  .tile{padding:6px 10px;gap:2px}
+  .sidebar{min-height:0}
+  .sidebar>.spacer{display:none}
+  .tree{flex:1 1 auto;min-height:0;overflow-y:auto}
+  .main{min-height:0}
+  #detail{flex:none}
+  .lower{flex:1 1 auto;min-height:0;flex-wrap:nowrap}
+  .devices{min-height:200px;min-width:0;gap:8px}
+  .history{flex:0 0 290px;min-height:0;gap:8px}
+  .history>.spacer{display:none}
+  .table-wrap{flex:1 1 auto;min-height:0;overflow:auto}
+  table.dev thead th{position:sticky;top:0;background:#fff;z-index:1;box-shadow:inset 0 -1px 0 var(--line)}
+  .hist{flex:1 1 auto;min-height:0;overflow-y:auto}
+  .log{position:static;flex:none}
+  .log-head{min-height:30px;padding:4px 16px}
+  .log-list{max-height:84px;padding:0 16px 6px}
 }

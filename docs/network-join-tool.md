@@ -170,6 +170,7 @@ Sidebar button **Discover networks on the wire…** opens a wizard: *listen time
 - Info tiles reflow automatically (4 → 3 → 2 → 1 across).
 - **Device list switches to cards when its *panel* is narrower than 620 px** (CSS container query), so it adapts to split-screen and side panels, not just the window size. Cards use as many columns as fit.
 - Dialogs (node editor, settings, Discover) go single-column on small screens.
+- **Dashboard layout on laptop-size windows (≥ 1181 × 520 px):** the page itself doesn't scroll. Top bar (one line), network header (compact) and Activity bar (4 lines when open) stay put; **Sites**, **Devices** and **IP history** scroll inside their own panels, and the device table's column headings stay visible. Checked at 1920×960, 1536×740 (1080p at 125 %) and 1366×650. Narrower windows (split screen, phones) keep the normal scrolling page. The Scan menu sizes itself to stay above the Activity bar.
 - **Activity log** is a bar pinned to the bottom: tap to open/close (remembered). Closed, it shows the latest message (two lines on narrow screens); open, newest first with long messages wrapped. Starts closed below 600 px, open on wider screens.
 
 ### v0.5.0 – icon and taskbar app

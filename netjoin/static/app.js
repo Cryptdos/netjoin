@@ -71,7 +71,7 @@ async function refreshStatus() {
     const p = s.primary;
     cur.append(el("span", { class: "small muted" }, "Current"),
       el("span", { class: "mono" }, p ? `${p.ip}/${p.prefix}` : "no IPv4"),
-      el("span", { class: "small muted" }, (s.adapter.dhcp ? "DHCP" : "Static") + (s.joined ? ` · ${s.joined.network}` : "")));
+      el("span", { class: "small muted cur-mode", title: (s.adapter.dhcp ? "DHCP" : "Static") + (s.joined ? ` · ${s.joined.path || s.joined.network}` : "") }, (s.adapter.dhcp ? "DHCP" : "Static") + (s.joined ? ` · ${s.joined.network}` : "")));
     if (s.internet !== null && s.internet !== undefined) {
       cur.append(el("span", { class: "inet" + (s.internet ? " yes" : "") }, globe(!s.internet), s.internet ? "Internet" : "No internet"));
     }
@@ -228,6 +228,13 @@ function renderScanMenu() {
   box.replaceChildren(...kids);
 }
 document.addEventListener("click", (e) => { const m = $("#scanMenu"); if (m.open && !m.contains(e.target)) m.open = false; });
+// Keep the open menu inside the visible area (dashboard layout: above the Activity bar).
+$("#scanMenu").addEventListener("toggle", (e) => {
+  if (!e.target.open) return;
+  const list = $("#scanOptions"); const top = $("#scanMenuBtn").getBoundingClientRect().bottom;
+  const limit = Math.min(window.innerHeight, $("#logBox").getBoundingClientRect().top) - top - 12;
+  list.style.maxHeight = `${Math.max(160, limit)}px`;
+});
 
 async function startScan(kind) {
   const d = state.detail; if (!d) return;
