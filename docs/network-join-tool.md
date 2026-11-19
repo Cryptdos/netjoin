@@ -170,6 +170,7 @@ Sidebar button **Discover networks on the wire…** opens a wizard: *listen time
 - Info tiles reflow automatically (4 → 3 → 2 → 1 across).
 - **Device list switches to cards when its *panel* is narrower than 620 px** (CSS container query), so it adapts to split-screen and side panels, not just the window size. Cards use as many columns as fit.
 - Dialogs (node editor, settings, Discover) go single-column on small screens.
+- **Activity log** is a bar pinned to the bottom: tap to open/close (remembered). Closed, it shows the latest message (two lines on narrow screens); open, newest first with long messages wrapped. Starts closed below 600 px, open on wider screens.
 
 ### Ideas / feasibility notes
 

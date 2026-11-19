@@ -78,7 +78,12 @@
   </main>
 </div>
 
-<footer class="log" id="log" aria-live="polite"></footer>
+<footer class="log" id="logBox">
+  <button type="button" class="log-head" id="logToggle" aria-expanded="true" aria-controls="log">
+    <span class="caps">Activity</span><span class="log-last" id="logLast"></span><span class="chev" aria-hidden="true">▾</span>
+  </button>
+  <div class="log-list" id="log" aria-live="polite"></div>
+</footer>
 
 <dialog id="nodeDlg">
   <form method="dialog" id="nodeForm">

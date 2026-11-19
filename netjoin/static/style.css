@@ -93,9 +93,21 @@ input:disabled{background:#F4F5F7;color:var(--muted)}
 .tag.clashed{background:var(--warn-bg);color:var(--warn)}
 .tag.failed{background:var(--err-bg);color:var(--err)}
 
-.log{display:flex;flex-direction:column-reverse;gap:2px;max-height:96px;overflow-y:auto;padding:8px 20px;background:#1B1F24;color:#D9DCE1;font:12px/1.5 var(--mono)}
+.log{position:sticky;bottom:0;z-index:10;background:#1B1F24;color:#D9DCE1;font:12px/1.5 var(--mono);box-shadow:0 -2px 10px rgba(0,0,0,.12)}
+.log-head{display:flex;align-items:center;gap:12px;width:100%;min-height:34px;padding:6px 20px;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer}
+.log-head .caps{color:#9AA3AE;flex:none}
+.log-head:focus-visible{outline:2px solid #8DB4EE;outline-offset:-2px}
+.log-last{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.log .chev{flex:none;color:#9AA3AE;transition:transform .15s}
+.log.open .chev{transform:rotate(180deg)}
+.log.open .log-last{visibility:hidden}
+.log-list{display:none;flex-direction:column;gap:3px;max-height:132px;overflow-y:auto;padding:0 20px 10px}
+.log.open .log-list{display:flex}
+.log-list>div{display:grid;grid-template-columns:64px minmax(0,1fr);gap:8px;overflow-wrap:anywhere}
+.log-list .t{color:#9AA3AE}
 .log .warn{color:#F5C28A}
 .log .error{color:#F4A6A9}
+.log-last.warn{color:#F5C28A}.log-last.error{color:#F4A6A9}
 
 dialog{border:1px solid var(--line);border-radius:10px;padding:0;width:min(520px,94vw);box-shadow:0 12px 40px rgba(0,0,0,.18)}
 dialog::backdrop{background:rgba(27,31,36,.35)}
@@ -195,7 +207,9 @@ table.dev td.small{min-width:110px}
   h1{font-size:20px}
   .dhead{gap:8px}
   .dhead>div[style]{margin-top:0!important}
-  .log{padding:6px 12px;max-height:72px}
+  .log-head{padding:6px 12px}
+  .log-list{padding:0 12px 10px;max-height:40vh}
+  .log-last{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
   .saveform{grid-template-columns:1fr}
   .two{grid-template-columns:1fr}
   dialog form,dialog .dlg{padding:16px}

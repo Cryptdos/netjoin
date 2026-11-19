@@ -589,11 +589,21 @@ async function refreshLog() {
     const box = $("#log");
     for (const it of items) {
       if (it.id <= state.logAfter) continue;   // two refreshes can overlap; never show a line twice
-      box.prepend(el("div", { class: it.level }, `${it.ts}  ${it.msg}`)); state.logAfter = it.id;
+      box.prepend(el("div", { class: it.level }, el("span", { class: "t" }, it.ts), el("span", {}, it.msg))); state.logAfter = it.id;
+      const last = $("#logLast"); last.textContent = `${it.ts}  ${it.msg}`; last.className = "log-last " + (it.level || "");
     }
     while (box.childElementCount > 200) box.lastElementChild.remove();
   } catch (e) {}
 }
+
+// ---------- activity log open / closed ----------
+(function logToggle() {
+  let open = window.innerWidth > 600;
+  try { const saved = localStorage.getItem("nj.logOpen"); if (saved !== null) open = saved === "1"; } catch (e) {}
+  const apply = () => { $("#logBox").classList.toggle("open", open); $("#logToggle").setAttribute("aria-expanded", String(open)); };
+  $("#logToggle").addEventListener("click", () => { open = !open; apply(); try { localStorage.setItem("nj.logOpen", open ? "1" : "0"); } catch (e) {} });
+  apply();
+})();
 
 // ---------- wiring ----------
 $("#adapter").addEventListener("change", async (e) => {
