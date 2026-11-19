@@ -4,7 +4,7 @@ _Last updated: 2026-11-19_
 
 App name: **NetJoin**. Target: Windows 10+, engineers have local admin.
 
-**Build phases:** 1 – tree, Join + clash check, DHCP / rejoin, history, internet check, gateway / DNS overrides, SQLite *(built, v0.1.0 – tested on Windows 2026-11-19: Join, clash detection via DAD, gateway override, Revert to DHCP all working)* · 2 – scans (ARP, ping, BACnet Who-Is, port check, Npcap detection) *(built, v0.2.1 – tested on Windows)* · 3 – Discover wizard, exe packaging polish *(built, v0.3.0 – needs testing on Windows)* · 4 – responsive layout for narrow windows (split-screen tabs, small browser windows), after all features are done.
+**Build phases:** 1 – tree, Join + clash check, DHCP / rejoin, history, internet check, gateway / DNS overrides, SQLite *(built, v0.1.0 – tested on Windows 2026-11-19: Join, clash detection via DAD, gateway override, Revert to DHCP all working)* · 2 – scans (ARP, ping, BACnet Who-Is, port check, Npcap detection) *(built, v0.2.1 – tested on Windows)* · 3 – Discover wizard, exe packaging polish *(built, v0.3.0 – Discover tested on Windows 2026-11-19)* · 4 – responsive layout for narrow windows (split-screen tabs, small browser windows), after all features are done.
 
 ## Concept
 
@@ -158,6 +158,7 @@ Sidebar button **Discover networks on the wire…** opens a wizard: *listen time
 - **Suggested laptop range:** .200–.254 if no device was seen there; otherwise the highest run of ≥20 free addresses; otherwise .200–.254 with a warning (Join skips clashes anyway).
 - **Already saved?** A subnet that matches a saved network shows "Saved as Site › Area › Network" with **Open** and **Join**.
 - **Save as network:** pick an existing site or create one, optionally an area (existing or new), name (default "BMS 10.20.5.x" when BACnet devices were found), subnet and range are editable. **Save & Join** joins straight away.
+- **Tested 2026-11-19 (Npcap installed):** on-subnet, found 192.168.1.0/24 from broadcasts with the IQ4 as BACnet. With the laptop on 10.20.5.200, still found 192.168.1.0/24 from broadcasts, the gateway (.1) and a free range, and matched the saved network – but the IQ4's I-Am did **not** come back. It most likely replied unicast to 10.20.5.200, which it routes via its own gateway, so the reply never reaches the cable. Off-subnet, Discover reliably finds *subnets*; it only lists BACnet devices that reply by broadcast. Decision pending: leave as Join → Scan, or add an opt-in Npcap "identify devices" step that borrows a free address on the discovered subnet.
 - Off-subnet discovery doesn't read BACnet device names (those replies can't route back); run a Scan after joining to get names, models and MACs.
 
 **Packaging:** `build.bat` runs the tests, builds `dist\NetJoin\NetJoin.exe` (asks for admin via UAC manifest) and zips it to `dist\NetJoin-<version>.zip`. Console window title shows the version. `NetJoin.exe --version` prints it.
