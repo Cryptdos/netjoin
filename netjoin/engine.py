@@ -141,12 +141,16 @@ class Engine:
                              f"{' (' + '; '.join(extra) + ')' if extra else ''} ✓ · internet: {'yes' if internet else 'no'}")
                 return {"ok": True, "ip": cand, "prefix": net.prefixlen, "internet": internet, "attempts": tried}
             # Nothing worked: put the adapter back how it was.
+            if ip:
+                what, msg = f"{ip} is in use by another device", f"{ip} is in use by another device. Try Join to pick a free address."
+            else:
+                what, msg = f"No free address found after {tried} tries", f"Every address tried clashed ({tried} tries). Check the allowed range."
             try:
                 self._restore(snap)
-                self.log.add(f"No free address found after {tried} tries; restored previous settings on {a.name}", "error")
+                self.log.add(f"{what}; restored previous settings on {a.name}", "error")
             except NetError as e:
-                self.log.add(f"No free address found, and restoring previous settings failed: {e}", "error")
-            raise JoinError(f"Every address tried clashed ({tried} tries). Check the allowed range.")
+                self.log.add(f"{what}, and restoring previous settings failed: {e}", "error")
+            raise JoinError(msg)
 
     def dhcp(self, adapter_name: str | None = None) -> dict:
         if not self.backend.is_admin():

@@ -306,7 +306,10 @@ async function refreshLog() {
   try {
     const items = await api(`/log?after=${state.logAfter}`);
     const box = $("#log");
-    for (const it of items) { box.prepend(el("div", { class: it.level }, `${it.ts}  ${it.msg}`)); state.logAfter = it.id; }
+    for (const it of items) {
+      if (it.id <= state.logAfter) continue;   // two refreshes can overlap; never show a line twice
+      box.prepend(el("div", { class: it.level }, `${it.ts}  ${it.msg}`)); state.logAfter = it.id;
+    }
     while (box.childElementCount > 200) box.lastElementChild.remove();
   } catch (e) {}
 }

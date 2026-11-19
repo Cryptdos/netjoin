@@ -114,6 +114,10 @@ class StoreAndJoin(unittest.TestCase):
         self.store.update_node(self.net["id"], {"gw_override": 1, "gateway": "10.20.5.254"})
         self.assertEqual(self.store.resolve_gateway_dns(self.net["id"])["gateway"], "10.20.5.254")
 
+    def test_explicit_ip_in_use(self):
+        with self.assertRaisesRegex(JoinError, "10.20.5.200 is in use"):
+            self.engine.join(self.net["id"], ip="10.20.5.200")
+
     def test_explicit_ip_outside_subnet(self):
         with self.assertRaises(JoinError):
             self.engine.join(self.net["id"], ip="10.20.6.5")
