@@ -295,20 +295,20 @@ function renderDevices() {
   const tr = (x) => {
     const self = x.sources === "self" || (x.sources || "").split(",").includes("self");
     const ports = (x.ports || "").split(",").filter(Boolean).map(Number);
+    const seen = [(x.sources || "").split(",").filter((s) => s && s !== "self").join(" · ") || "—",
+      el("span", { class: "sub2" }, [x.ping_ms != null ? `${x.ping_ms} ms` : null, when(x.last_seen)].filter(Boolean).join(" · "))];
     return el("tr", { class: self ? "self" : null },
-      el("td", { class: "mono" }, x.ip),
-      el("td", { class: "mono" }, x.mac || "—"),
-      el("td", {}, self ? [el("strong", {}, "This PC"), x.name ? el("span", { class: "sub2" }, x.name) : null] : vendorCell(x)),
-      el("td", {}, x.bacnet_instance != null ? [
+      el("td", { class: "mono ipcell", "data-label": "IP" }, x.ip),
+      el("td", { class: "mono", "data-label": "MAC" }, x.mac || "—"),
+      el("td", { "data-label": "Vendor" }, self ? [el("strong", {}, "This PC"), x.name ? el("span", { class: "sub2" }, x.name) : null] : vendorCell(x)),
+      el("td", { "data-label": "BACnet" }, x.bacnet_instance != null ? [
         el("span", { class: "mono" }, `#${x.bacnet_instance}`), x.name ? ` · ${x.name}` : "",
         x.model ? el("span", { class: "sub2" }, x.model) : null,
         x.route ? el("span", { class: "sub2" }, `behind ${x.ip} (${x.route})`) : null] : "—"),
-      el("td", {}, ports.length ? ports.map((p) => [80, 443, 8080].includes(p)
+      el("td", { "data-label": "Ports" }, ports.length ? ports.map((p) => [80, 443, 8080].includes(p)
         ? el("a", { class: "port", href: webUrl(x.ip, p), target: "_blank", rel: "noopener noreferrer" }, portLabel[p] || p)
         : el("span", { class: "port" }, portLabel[p] || p)) : "—"),
-      el("td", { class: "small" }, (x.sources || "").split(",").filter((s) => s && s !== "self").join(" · ") || "—",
-        x.ping_ms != null ? el("span", { class: "sub2" }, `${x.ping_ms} ms`) : null,
-        el("span", { class: "sub2" }, when(x.last_seen))));
+      el("td", { class: "small", "data-label": "Seen by" }, seen));
   };
   box.replaceChildren(el("table", { class: "dev" },
     el("thead", {}, el("tr", {}, ["IP", "MAC", "Vendor", "BACnet device", "Open ports", "Seen by"].map((h) => el("th", {}, h)))),
@@ -404,12 +404,13 @@ function discCard(r) {
       (r.gateway_hint ? ` · devices ARP for ${r.gateway_hint}, probably the gateway (NetJoin leaves the gateway off unless you set it)` : "")),
     el("div", { class: "meta" }, `Suggested laptop range ${r.range_start} – ${r.range_end}` +
       (r.range_clashes ? ` (${r.range_clashes} device(s) seen inside it – Join will skip them)` : " (no devices seen there)")),
+    ...(!r.contains_me ? [el("div", { class: "meta hint" }, "Join and scan to identify BACnet devices – from a different subnet, controllers that reply directly to the laptop can't be heard.")] : []),
     el("details", {}, el("summary", {}, `Show ${r.host_count} device(s)`), hostTable));
   if (r.saved_as && r.saved_as.length) {
     const n = r.saved_as[0];
     actions.append(el("span", { class: "small muted" }, `Saved as ${n.path}`),
       el("button", { type: "button", class: "btn small", onclick: async () => { $("#discoverDlg").close(); await openNetwork(n.id); } }, "Open"),
-      el("button", { type: "button", class: "btn small btn-primary", onclick: async (e) => { $("#discoverDlg").close(); await openNetwork(n.id); doJoin(null); } }, "Join"));
+      el("button", { type: "button", class: "btn small btn-primary", title: "Join, then run a Quick scan", onclick: async () => { $("#discoverDlg").close(); await openNetwork(n.id); await joinAndScan(); } }, "Join & scan"));
   } else {
     actions.append(el("button", { type: "button", class: "btn small btn-primary", onclick: () => { actions.hidden = true; card.append(saveForm(r, card)); } }, "Save as network…"));
   }
@@ -452,7 +453,7 @@ function saveForm(r, card) {
       $("#discoverDlg").close();
       await openNetwork(n.id);
       flash(`Saved ${n.name} (${n.subnet})`);
-      if (join) doJoin(null);
+      if (join) await joinAndScan();
     } catch (e) { err.textContent = e.message; }
   };
   const lab = (t, input, cls) => el("label", { class: cls || null }, t, input);
@@ -463,10 +464,15 @@ function saveForm(r, card) {
     lab("Laptop range from", rs), lab("to", re), err,
     el("div", { class: "row full" }, el("div", { class: "spacer" }),
       el("button", { type: "button", class: "btn", onclick: () => save(false) }, "Save"),
-      el("button", { type: "button", class: "btn btn-primary", onclick: () => save(true) }, "Save & Join")));
+      el("button", { type: "button", class: "btn btn-primary", title: "Save, join, then run a Quick scan", onclick: () => save(true) }, "Save, Join & scan")));
   queueMicrotask(syncSite);
   siteSel.addEventListener("change", syncSite); areaSel.addEventListener("change", syncArea);
   return form;
+}
+
+async function joinAndScan() {
+  await doJoin(null);
+  if (state.detail && state.detail.on_subnet) await startScan("quick");
 }
 
 async function openNetwork(id) {

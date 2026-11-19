@@ -15,7 +15,7 @@ Design notes: [docs/network-join-tool.md](docs/network-join-tool.md)
 
 **Phase 3 (v0.3.0):** **Discover networks on the wire** – plug into an unknown BMS network, listen and broadcast a BACnet Who-Is, and NetJoin works out the subnet(s), the likely gateway and a free laptop range, then saves the network and joins it. Build script now produces a ready-to-share zip.
 
-Next: Phase 4 layout for narrow windows (split-screen, small browser windows).
+**Phase 4 (v0.4.0):** works in narrow windows – split-screen, small browser windows, down to phone width. Device list switches to cards when its panel is narrow. Discover offers **Join & scan** for networks found from another subnet.
 
 ## Quick start (from source)
 

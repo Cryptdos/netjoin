@@ -75,12 +75,11 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,.btn:focus-visib
 .crumbs{font-size:12px;color:var(--muted)}
 .pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border:1px solid var(--line);border-radius:999px;font-size:12px;color:var(--muted)}
 .pill.yes{color:var(--accent-d);border-color:#B9D0F0;background:var(--accent-bg)}
-.tiles{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:16px}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-top:16px}
 .tile{display:flex;flex-direction:column;gap:4px;padding:10px 12px;background:var(--bg);border-radius:6px;min-width:0}
 .tile .k{font-size:12px;color:var(--muted)}
 .tile .v{font-family:var(--mono);overflow-wrap:anywhere}
 .tile .from{font-size:11px;color:var(--muted)}
-@media (max-width:760px){.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 .hist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
 .hist button{width:100%;display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line2);border-radius:6px;background:#fff;font:inherit;cursor:pointer;text-align:left}
@@ -158,3 +157,47 @@ label.inline{display:inline-flex!important;flex-direction:row!important;align-it
 .saveform label{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:600;color:var(--muted)}
 .saveform .full{grid-column:1/-1}
 .pill.guess{background:var(--warn-bg);color:var(--warn);border-color:#EFCFB5}
+.dcard .hint{color:var(--accent-d)}
+
+/* ---------- Phase 4: narrow windows (split screen, small browser windows) ---------- */
+.field-inline{flex:1 1 260px;min-width:0;max-width:480px}
+.field-inline select{flex:1 1 auto;min-width:0;width:100%;max-width:none}
+#adapter{max-width:none}
+.current{min-width:0}
+.devices{container-type:inline-size}
+table.dev td.small{min-width:110px}
+
+/* Device list becomes cards when its panel is narrow – follows the panel, not the window */
+@container (max-width: 620px){
+  table.dev thead{display:none}
+  table.dev,table.dev tbody{display:block}
+  table.dev tr{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px 12px;padding:10px 12px;border:1px solid var(--line2);border-radius:8px;margin-bottom:8px}
+  table.dev td{display:block;border:0;padding:0;min-width:0;overflow-wrap:anywhere}
+  table.dev td.mono{white-space:normal}
+  table.dev td::before{content:attr(data-label);display:block;font:600 11px "Segoe UI",Inter,system-ui,sans-serif;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
+  table.dev td.ipcell{grid-column:1/-1;font-size:15px;font-weight:600}
+  table.dev td.ipcell::before{display:none}
+}
+
+@media (max-width: 900px){
+  .sidebar{max-width:none;flex-basis:100%}
+  .tree{max-height:40vh;overflow-y:auto}
+  .side-actions{flex-direction:row;flex-wrap:wrap}
+  .side-actions .btn{flex:1 1 200px}
+}
+@media (max-width: 600px){
+  .topbar{padding:10px 12px;gap:10px}
+  .body{padding:8px;gap:8px}
+  .main,.lower{gap:8px}
+  .panel{padding:12px 14px}
+  .current{width:100%}
+  .spacer.top{display:none}
+  h1{font-size:20px}
+  .dhead{gap:8px}
+  .dhead>div[style]{margin-top:0!important}
+  .log{padding:6px 12px;max-height:72px}
+  .saveform{grid-template-columns:1fr}
+  .two{grid-template-columns:1fr}
+  dialog form,dialog .dlg{padding:16px}
+  .menu-list{right:auto;left:0;min-width:min(300px,86vw)}
+}
