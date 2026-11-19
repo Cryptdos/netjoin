@@ -70,5 +70,10 @@ class FakeBackend(Backend):
     def wait_dad(self, name, ip, timeout=4.0):
         return self.dad_state(name, ip)
 
-    def check_internet(self, src_ip):
-        return src_ip.startswith("192.168.1.")
+    def check_internet(self, src_ip, dns):
+        from ..inet import INTERNET, IP_ONLY, NONE
+        if not src_ip.startswith("192.168.1."):
+            return {"code": NONE, "detail": "no route to the internet from this adapter"}
+        if not dns:
+            return {"code": IP_ONLY, "detail": "internet reachable by IP, but no DNS servers are set – web pages won't load"}
+        return {"code": INTERNET, "detail": "route and DNS both working"}

@@ -71,6 +71,8 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,.btn:focus-visib
 .tree .item:hover .add,.tree .item:focus-within .add{opacity:1}
 .inet{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--muted)}
 .inet.yes{color:var(--accent-d)}
+.inet.warn{color:var(--warn);font-weight:600}
+.pill.warn{color:var(--warn);border-color:#EFCFB5;background:var(--warn-bg)}
 
 .dhead{display:flex;flex-wrap:wrap;align-items:flex-start;gap:12px 24px}
 .crumbs{font-size:12px;color:var(--muted)}
@@ -82,7 +84,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,.btn:focus-visib
 .tile .v{font-family:var(--mono);overflow-wrap:anywhere}
 .tile .from{font-size:11px;color:var(--muted)}
 
-.hist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.hist{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px;overflow-x:hidden}
 .hist button{width:100%;display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line2);border-radius:6px;background:#fff;font:inherit;cursor:pointer;text-align:left}
 .hist button:hover:not(:disabled){border-color:#B9C0C9}
 .hist .ip{font-family:var(--mono);flex-grow:1}

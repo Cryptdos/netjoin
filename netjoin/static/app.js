@@ -7,6 +7,11 @@ const state = { tree: [], selected: null, detail: null, status: null, expanded: 
 
 try { JSON.parse(localStorage.getItem("nj.expanded") || "[]").forEach((id) => state.expanded.add(id)); } catch (e) {}
 try { state.selected = JSON.parse(localStorage.getItem("nj.selected") || "null"); } catch (e) {}
+// Internet codes from the server: 1 internet, 2 by IP only (no working DNS), 0 none.
+const INET = { 1: { cls: " yes", text: "Internet", off: false },
+  2: { cls: " warn", text: "Internet by IP only – no DNS", off: false },
+  0: { cls: "", text: "No internet", off: true } };
+const inetInfo = (c) => INET[c] || INET[0];
 const saveUi = () => { try {
   localStorage.setItem("nj.expanded", JSON.stringify([...state.expanded]));
   localStorage.setItem("nj.selected", JSON.stringify(state.selected));
@@ -73,9 +78,11 @@ async function refreshStatus() {
       el("span", { class: "mono" }, p ? `${p.ip}/${p.prefix}` : "no IPv4"),
       el("span", { class: "small muted cur-mode", title: (s.adapter.dhcp ? "DHCP" : "Static") + (s.joined ? ` · ${s.joined.path || s.joined.network}` : "") }, (s.adapter.dhcp ? "DHCP" : "Static") + (s.joined ? ` · ${s.joined.network}` : "")));
     if (s.internet !== null && s.internet !== undefined) {
-      cur.append(el("span", { class: "inet" + (s.internet ? " yes" : "") }, globe(!s.internet), s.internet ? "Internet" : "No internet"));
+      const i = inetInfo(s.internet);
+      cur.append(el("span", { class: "inet" + i.cls, title: s.internet === 2 ? "Reaches the internet by IP, but no DNS server answers, so web pages won't load. Set DNS on the network (Edit → Override DNS)." : null }, globe(i.off), i.text));
     }
-    cur.append(el("button", { type: "button", class: "btn small", onclick: (e) => withBusy(e.currentTarget, async () => { await api("/internet", { method: "POST" }); await refreshStatus(); }) }, "Check internet"));
+    cur.append(el("button", { type: "button", class: "btn small", onclick: (e) => withBusy(e.currentTarget, async () => {
+      const r = await api("/internet", { method: "POST" }); if (r.internet === 2) flash(r.detail, "error"); await refreshStatus(); }) }, "Check internet"));
   }
   const rj = $("#rejoinBtn");
   if (s.last_network && !s.joined) { rj.hidden = false; rj.textContent = `Rejoin ${s.last_network.network}`; }
@@ -156,7 +163,8 @@ async function refreshDetail() {
     renderHistory(); return;
   }
   const inetPill = d.last_internet == null ? el("span", { class: "pill" }, "Internet: not checked yet")
-    : el("span", { class: "pill" + (d.last_internet ? " yes" : "") }, globe(!d.last_internet), d.last_internet ? "Had internet at last join" : "No internet at last join");
+    : el("span", { class: "pill" + inetInfo(d.last_internet).cls }, globe(inetInfo(d.last_internet).off),
+        { 1: "Had internet at last join", 2: "Internet by IP only (no DNS) at last join", 0: "No internet at last join" }[d.last_internet] || "No internet at last join");
   const joinBtn = el("button", { type: "button", class: "btn btn-primary", style: "padding:0 24px", onclick: (e) => doJoin(e.currentTarget) }, "Join");
   const r = d.resolved;
   const tile = (k, v, from) => el("div", { class: "tile" }, el("span", { class: "k" }, k), el("span", { class: "v" }, v), from ? el("span", { class: "from" }, from) : null);
@@ -203,7 +211,7 @@ async function doJoin(btn, ip) {
   const d = state.detail; if (!d) return;
   await withBusy(btn, async () => {
     const r = await api("/join", { method: "POST", body: { network_id: d.id, ip } });
-    flash(`Joined ${d.name} as ${r.ip}/${r.prefix}${r.attempts > 1 ? ` (after ${r.attempts - 1} clash${r.attempts > 2 ? "es" : ""})` : ""} · internet: ${r.internet ? "yes" : "no"}`);
+    flash(`Joined ${d.name} as ${r.ip}/${r.prefix}${r.attempts > 1 ? ` (after ${r.attempts - 1} clash${r.attempts > 2 ? "es" : ""})` : ""} · ${inetInfo(r.internet).text.toLowerCase()}`, r.internet === 2 ? "error" : "info");
   });
   await Promise.all([refreshStatus(), refreshTree()]); await refreshDetail();
 }
@@ -518,6 +526,7 @@ function syncOverrides(f) {
   f.gateway.disabled = !f.gw_override.checked;
   f.dns.disabled = !f.dns_override.checked;
   const sg = f.querySelector("#suggestGw"); if (sg) sg.disabled = !f.gw_override.checked;
+  const dg = f.querySelector("#dnsFromGw"); if (dg) dg.disabled = !f.dns_override.checked;
 }
 for (const id of ["#nodeForm", "#settingsForm"]) {
   const f = $(id);
@@ -549,6 +558,12 @@ $("#deleteNodeBtn").addEventListener("click", async () => {
   try { await api(`/nodes/${n.id}`, { method: "DELETE" }); $("#nodeDlg").close();
     if (state.selected === n.id) state.selected = n.parent_id; saveUi(); await refreshTree(); await refreshDetail(); refreshLog(); }
   catch (err) { $("#nodeErr").textContent = err.message; }
+});
+$("#dnsFromGw").addEventListener("click", () => {
+  const f = $("#nodeForm");
+  const gw = f.gateway.value.trim() || (state.detail && state.detail.resolved && state.detail.resolved.gateway) || "";
+  if (!gw) { $("#nodeErr").textContent = "Set a gateway first (or type the DNS server in)."; return; }
+  f.dns.value = gw;
 });
 $("#suggestGw").addEventListener("click", () => {
   const f = $("#nodeForm");

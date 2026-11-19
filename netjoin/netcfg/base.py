@@ -76,6 +76,7 @@ class Backend:
     def wait_dad(self, name: str, ip: str, timeout: float = 4.0) -> str | None:
         return self.dad_state(name, ip)
 
-    def check_internet(self, src_ip: str) -> bool:
-        from ..inet import check_internet
-        return check_internet(src_ip)
+    def check_internet(self, src_ip: str, dns: list[str]) -> dict:
+        """See inet.check: {'code': 0 none | 1 internet | 2 IP only, 'detail': ...}"""
+        from ..inet import check
+        return check(src_ip, dns)

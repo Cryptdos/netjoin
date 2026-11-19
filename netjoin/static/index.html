@@ -104,7 +104,9 @@
       <div class="two"><label>Gateway <input name="gateway" class="mono" autocomplete="off"></label>
         <div class="suggest"><button type="button" class="btn small" id="suggestGw">Suggest .1</button></div></div>
       <label class="check"><input type="checkbox" name="dns_override"> Override DNS</label>
-      <label>DNS servers (comma separated) <input name="dns" class="mono" autocomplete="off"></label>
+      <div class="two"><label>DNS servers (comma separated) <input name="dns" class="mono" autocomplete="off"></label>
+        <div class="suggest"><button type="button" class="btn small" id="dnsFromGw" title="Most routers also answer DNS">Use gateway</button></div></div>
+      <p class="small muted">Without DNS servers you can reach devices by IP, but web pages won't load.</p>
     </fieldset>
     <label>Notes <textarea name="notes" rows="2"></textarea></label>
     <p class="error" id="nodeErr" role="alert"></p>

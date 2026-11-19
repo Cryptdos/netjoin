@@ -236,6 +236,8 @@ Sidebar button **Discover networks on the wire…** opens a wizard: *listen time
 - Provide some input on how you would best like to handle these settings/DNS details.
 
 **Decided:**
+- **Internet check has three results (v0.5.3):** *Internet* (route **and** a real DNS query to the adapter's DNS servers both work), *Internet by IP only – no DNS* (warning: devices and IPs reachable, web pages won't load), *No internet*. Found in testing: with a gateway but no DNS, the old check said "internet" because Windows had the test name cached and the fallback connected by IP.
+- Node editor has **Use gateway** next to the DNS field (most routers answer DNS).
 - **Gateway and DNS default to None** (blank). Reason: if the laptop gets internet over Wi-Fi, a gateway on the Ethernet adapter can pull internet traffic down the BMS cable and you lose internet.
 - Each level (global › site › area › network) has an **"Override" tick box**. When ticked, that level's gateway / DNS fields are enabled. A network uses the nearest level above it that has an override set.
 - When an override is ticked, the field can offer a "Suggest .1" helper.

@@ -37,7 +37,7 @@ CREATE TABLE IF NOT EXISTS history(
     ip TEXT,
     prefix INTEGER,
     result TEXT NOT NULL,          -- worked | clashed | failed
-    internet INTEGER,              -- 1 / 0 / NULL (not checked)
+    internet INTEGER,              -- 1 internet / 2 by IP only (no DNS) / 0 none / NULL not checked
     detail TEXT,
     ts TEXT NOT NULL
 );
@@ -287,7 +287,7 @@ class Store:
                  None if internet is None else int(internet), detail, now()))
             self.db.commit()
 
-    def set_last_internet(self, network_id: int, ip: str, internet: bool) -> None:
+    def set_last_internet(self, network_id: int, ip: str, internet: int) -> None:
         with self._lock:
             self.db.execute(
                 "UPDATE history SET internet=? WHERE id=(SELECT MAX(id) FROM history "

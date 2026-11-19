@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 from typing import Any
 
-from . import ipcalc
+from . import inet, ipcalc
 from .eventlog import EventLog
 from .netcfg import Adapter, Backend, NetError
 from .store import Store
@@ -125,7 +125,8 @@ class Engine:
                     continue
                 if state not in ("preferred", None):
                     self.log.add(f"{cand} state is '{state}' after waiting; carrying on", "warn")
-                internet = self.backend.check_internet(cand)
+                chk = self.backend.check_internet(cand, gwdns["dns"])
+                internet = chk["code"]
                 self.internet_cache[a.name] = internet
                 self.store.add_history(network_id, a.name, cand, net.prefixlen, "worked", internet)
                 applied = {"adapter": a.name, "ip": cand, "prefix": net.prefixlen, "network_id": network_id,
@@ -138,7 +139,10 @@ class Engine:
                 if gwdns["dns"]:
                     extra.append(f"dns {', '.join(gwdns['dns'])}")
                 self.log.add(f"Applied {cand}/{net.prefixlen} to {a.name}"
-                             f"{' (' + '; '.join(extra) + ')' if extra else ''} ✓ · internet: {'yes' if internet else 'no'}")
+                             f"{' (' + '; '.join(extra) + ')' if extra else ''} ✓ · internet: {inet.describe(internet)}")
+                if internet == inet.IP_ONLY:
+                    self.log.add(f"{chk['detail']}. To browse on this network, tick Override DNS on it "
+                                 f"(e.g. use the gateway {gwdns['gateway']})" if gwdns["gateway"] else chk["detail"], "warn")
                 return {"ok": True, "ip": cand, "prefix": net.prefixlen, "internet": internet, "attempts": tried}
             # Nothing worked: put the adapter back how it was.
             if ip:
@@ -188,10 +192,12 @@ class Engine:
         p = a.primary
         if not p:
             raise JoinError(f"{a.name} has no IPv4 address")
-        ok = self.backend.check_internet(p.ip)
-        self.internet_cache[a.name] = ok
+        chk = self.backend.check_internet(p.ip, list(a.dns))
+        code = chk["code"]
+        self.internet_cache[a.name] = code
         applied = self.store.get_setting("applied")
         if applied and applied.get("adapter") == a.name and applied.get("ip") == p.ip:
-            self.store.set_last_internet(applied["network_id"], p.ip, ok)
-        self.log.add(f"Internet check on {a.name} ({p.ip}): {'yes' if ok else 'no'}")
-        return {"internet": ok}
+            self.store.set_last_internet(applied["network_id"], p.ip, code)
+        self.log.add(f"Internet check on {a.name} ({p.ip}): {inet.describe(code)}"
+                     + (f" – {chk['detail']}" if code == inet.IP_ONLY else ""), "warn" if code == inet.IP_ONLY else "info")
+        return {"internet": code, "detail": chk["detail"]}
