@@ -52,31 +52,50 @@ def run(url: str, engine, stop_server: Callable[[], None]) -> None:
         except Exception:
             pass
 
+    quitting = threading.Lock()
+
     def quit_app(icon, item):
-        applied = None
+        # Return straight away: the dialog and shutdown run in their own thread, so the tray
+        # icon's message handling is never blocked while the question is on screen.
+        if quitting.acquire(blocking=False):
+            threading.Thread(target=_quit_flow, args=(icon,), name="netjoin-quit", daemon=True).start()
+
+    def _quit_flow(icon):
         try:
-            applied = engine.still_applied()
-        except Exception:
-            pass
-        if applied:
-            answer = message_box(
-                f"NetJoin set {applied['adapter']} to {applied['ip']}/{applied['prefix']} "
-                f"({applied.get('network', 'a site network')}).\n\n"
-                "Switch it back to DHCP before quitting?\n\n"
-                "Yes – back to DHCP and quit\nNo – leave the IP as it is and quit\nCancel – keep NetJoin running",
-                f"Quit {APP_NAME}", MB_YESNOCANCEL | MB_ICONQUESTION)
-            if answer == IDCANCEL:
-                return
-            if answer == IDYES:
-                try:
-                    engine.dhcp(applied["adapter"])
-                except Exception as e:
-                    if message_box(f"Couldn't switch back to DHCP:\n{e}\n\nQuit anyway?", f"Quit {APP_NAME}",
-                                   0x04 | MB_ICONERROR) != IDYES:   # MB_YESNO
-                        return
-        engine.log.add(f"{APP_NAME} quitting")
-        stop_server()
-        icon.stop()
+            applied = None
+            try:
+                applied = engine.still_applied()
+            except Exception as e:
+                engine.log.add(f"Quit: couldn't check adapter state: {e}", "warn")
+            if applied:
+                answer = message_box(
+                    f"NetJoin set {applied['adapter']} to {applied['ip']}/{applied['prefix']} "
+                    f"({applied.get('network', 'a site network')}).\n\n"
+                    "Switch it back to DHCP before quitting?\n\n"
+                    "Yes – back to DHCP and quit\nNo – leave the IP as it is and quit\nCancel – keep NetJoin running",
+                    f"Quit {APP_NAME}", MB_YESNOCANCEL | MB_ICONQUESTION)
+                engine.log.add(f"Quit: answer {({IDYES: 'Yes', IDNO: 'No', IDCANCEL: 'Cancel'}).get(answer, answer)}")
+                if answer == IDCANCEL:
+                    quitting.release()
+                    return
+                if answer == IDYES:
+                    try:
+                        engine.dhcp(applied["adapter"])
+                    except Exception as e:
+                        engine.log.add(f"Quit: DHCP failed: {e}", "error")
+                        if message_box(f"Couldn't switch back to DHCP:\n{e}\n\nQuit anyway?", f"Quit {APP_NAME}",
+                                       0x04 | MB_ICONERROR) != IDYES:   # MB_YESNO
+                            quitting.release()
+                            return
+            engine.log.add(f"{APP_NAME} quitting")
+        except Exception as e:
+            engine.log.add(f"Quit: unexpected error {e}", "error")
+        # Safety net: whatever happens below, the process is gone within a few seconds.
+        threading.Timer(6.0, lambda: os._exit(0)).start()
+        try:
+            stop_server()
+        finally:
+            icon.stop()
 
     menu = pystray.Menu(
         pystray.MenuItem("Open NetJoin", open_ui, default=True),   # default = left-click / double-click
