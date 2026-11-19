@@ -1,10 +1,12 @@
 @echo off
 rem Build a portable NetJoin folder in dist\NetJoin (zip it to share).
 cd /d "%~dp0"
-if not exist .venv (
-  py -3 -m venv .venv || goto :err
+set "PY=python"
+where py >nul 2>nul && set "PY=py -3"
+if not exist ".venv\Scripts\python.exe" (
+  %PY% -m venv .venv || goto :err
 )
-call .venv\Scripts\activate.bat
+call ".venv\Scripts\activate.bat"
 python -m pip install --upgrade pip >nul
 python -m pip install -r requirements-dev.txt || goto :err
 python -m unittest discover tests || goto :err
