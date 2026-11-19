@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS devices(
     ping_ms REAL,
     bacnet_instance INTEGER,
     bacnet_vendor_id INTEGER,
-    vendor TEXT,
+    vendor TEXT,                   -- from BACnet (the device's own vendor-name)
+    mac_vendor TEXT,               -- from the MAC address (network chip maker)
     name TEXT,
     model TEXT,
     route TEXT,
@@ -87,7 +88,14 @@ class Store:
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
+        self._migrate()
         self.db.commit()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after a database was first created."""
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(devices)")}
+        if "mac_vendor" not in cols:
+            self.db.execute("ALTER TABLE devices ADD COLUMN mac_vendor TEXT")
 
     # ---------- backups ----------
     def backup(self, folder: Path, keep: int = 10) -> Path:

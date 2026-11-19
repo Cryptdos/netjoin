@@ -138,3 +138,4 @@ table.dev td.mono{font-family:var(--mono);white-space:nowrap}
 table.dev tr.self{background:var(--accent-bg)}
 table.dev .sub2{display:block;font-size:11px;color:var(--muted)}
 .port{display:inline-block;margin:0 4px 2px 0;padding:1px 6px;border:1px solid var(--line);border-radius:4px;font-size:11px;white-space:nowrap}
+table.dev .sub2 a,table.dev td.small{color:var(--muted)}

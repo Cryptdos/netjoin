@@ -270,6 +270,15 @@ async function refreshDevices() {
   renderDevices();
 }
 
+// BACnet vendor-name (from the device itself) wins; otherwise the MAC manufacturer.
+function vendorCell(x) {
+  const bac = x.vendor || (x.bacnet_vendor_id != null ? `Vendor ID ${x.bacnet_vendor_id}` : null);
+  if (bac) return [bac, x.mac_vendor && x.mac_vendor !== bac ? el("span", { class: "sub2", title: "Network chip maker, from the MAC address" }, `NIC: ${x.mac_vendor}`) : null];
+  if (x.mac_vendor) return [el("span", { class: x.mac_vendor.startsWith("Randomised") ? "muted" : null }, x.mac_vendor),
+    el("span", { class: "sub2" }, "from MAC")];
+  return "—";
+}
+
 function renderDevices() {
   const d = state.detail; const box = $("#devicesBox");
   const all = state.devices;
@@ -289,7 +298,7 @@ function renderDevices() {
     return el("tr", { class: self ? "self" : null },
       el("td", { class: "mono" }, x.ip),
       el("td", { class: "mono" }, x.mac || "—"),
-      el("td", {}, self ? el("strong", {}, "This laptop") : (x.vendor || (x.bacnet_vendor_id != null ? `Vendor ID ${x.bacnet_vendor_id}` : "—"))),
+      el("td", {}, self ? [el("strong", {}, "This PC"), x.name ? el("span", { class: "sub2" }, x.name) : null] : vendorCell(x)),
       el("td", {}, x.bacnet_instance != null ? [
         el("span", { class: "mono" }, `#${x.bacnet_instance}`), x.name ? ` · ${x.name}` : "",
         x.model ? el("span", { class: "sub2" }, x.model) : null,

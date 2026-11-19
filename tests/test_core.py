@@ -138,7 +138,7 @@ class StoreAndJoin(unittest.TestCase):
         devs = self.store.devices("10.20.5.0/24")
         self.assertEqual(scans.status()["phase"], "done")
         self.assertEqual(sum(1 for d in devs if d["bacnet_instance"]), 4)
-        self.assertIn("This laptop", [d["name"] for d in devs])
+        self.assertTrue(any("self" in (d["sources"] or "") for d in devs))
         with self.assertRaises(ScanError):
             scans.start("passive", self.net["id"])     # needs Npcap
 

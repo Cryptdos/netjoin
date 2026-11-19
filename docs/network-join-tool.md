@@ -4,7 +4,7 @@ _Last updated: 2026-11-19_
 
 App name: **NetJoin**. Target: Windows 10+, engineers have local admin.
 
-**Build phases:** 1 – tree, Join + clash check, DHCP / rejoin, history, internet check, gateway / DNS overrides, SQLite *(built, v0.1.0 – tested on Windows 2026-11-19: Join, clash detection via DAD, gateway override, Revert to DHCP all working)* · 2 – scans (ARP, ping, BACnet Who-Is, port check, Npcap detection) *(built, v0.2.0 – needs testing on Windows)* · 3 – Discover wizard, exe packaging polish · 4 – responsive layout for narrow windows (split-screen tabs, small browser windows), after all features are done.
+**Build phases:** 1 – tree, Join + clash check, DHCP / rejoin, history, internet check, gateway / DNS overrides, SQLite *(built, v0.1.0 – tested on Windows 2026-11-19: Join, clash detection via DAD, gateway override, Revert to DHCP all working)* · 2 – scans (ARP, ping, BACnet Who-Is, port check, Npcap detection) *(built, v0.2.1 – tested on Windows)* · 3 – Discover wizard, exe packaging polish · 4 – responsive layout for narrow windows (split-screen tabs, small browser windows), after all features are done.
 
 ## Concept
 
@@ -138,6 +138,10 @@ Goal: locate hosts and controllers on the current subnet, and find BMS networks 
 - **BACnet Who-Is:** our own small implementation (no BAC0 needed). Global Who-Is (DNET 0xFFFF, so routers pass it to MS/TP networks) sent to the subnet broadcast and 255.255.255.255 from UDP 47808 on the adapter's IP. Listens 3 s, then reads each device's **object-name, model-name and vendor-name** with ReadProperty. Devices behind routers (e.g. DXR2.M on MS/TP behind a PXC) are listed with their router IP and "net N, MAC M". If UDP 47808 is already used by another BACnet tool, NetJoin uses a random port and warns that broadcast replies may be missed.
 - **BMS port check** on known hosts: 80 HTTP, 443 HTTPS, 8080, 502 Modbus TCP, 1911/4911 Niagara Fox, 22 SSH, 23 Telnet. Web ports become clickable links. *(Trend-specific ports to add once confirmed.)*
 - **Passive listen (Npcap only):** 30 s sniff of ARP and UDP 47808–47823, sending nothing. Hosts seen on *other* subnets are logged; Phase 3 Discover will use them.
+- **MAC addresses** come from the ARP sweep. After *any* scan, hosts still missing a MAC are looked up with Windows ARP (only the hosts found, not the whole subnet).
+- **Vendor:** BACnet devices report their own vendor name (read from the device, e.g. "Trend Control Systems Ltd"); a small table of BACnet vendor IDs is the fallback. Every other host gets its **MAC manufacturer** from the offline Wireshark list bundled with scapy. That names the network chip maker, which is usually but not always the brand. Randomised (private) MACs from phones/laptops are labelled as such.
+- **This PC:** the scanning computer is listed as "This PC" with its hostname and MAC (not "This laptop", since it may be a desktop).
+- **Tested on Windows 2026-11-19:** Npcap ARP sweep, ping sweep, port check, passive listen and BACnet Who-Is all worked; a Trend IQ4E answered Who-Is and reported name "IQ4E-LAB", model "IQ4E" and vendor "Trend Control Systems Ltd".
 - **Npcap detection:** `System32\Npcap\wpcap.dll`. Status and reason shown in Settings; Npcap-only options are greyed out with "Needs Npcap".
 
 ### Ideas / feasibility notes

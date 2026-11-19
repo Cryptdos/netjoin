@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import ipaddress
+import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-from . import npcap
+from . import npcap, oui
 from .probes import BMS_PORTS, Prober
 
 MAX_SWEEP_HOSTS = 1024
@@ -91,11 +92,17 @@ class ScanManager:
         count = lambda: sum(1 for d in self.store.devices(subnet) if d["key"] != src_ip)  # noqa: E731
         before = count()
         try:
-            self.store.upsert_device(subnet, src_ip, src_ip, "self", name="This laptop")
+            try:
+                my_mac = self.engine.adapter(adapter).mac or None
+            except Exception:
+                my_mac = None
+            self.store.upsert_device(subnet, src_ip, src_ip, "self", name=socket.gethostname(), mac=my_mac)
             for step in KINDS[kind]["steps"]:
                 if self._cancel.is_set():
                     break
                 getattr(self, f"_step_{step}")(adapter, src_ip, net)
+            if not self._cancel.is_set():
+                self._enrich(src_ip, net)
             self.store.set_setting(f"lastscan:{subnet}", {"ts": datetime.now().isoformat(timespec="seconds"),
                                                           "kind": KINDS[kind]["label"]})
             found = count()
@@ -110,6 +117,29 @@ class ScanManager:
         except Exception as e:   # report, never kill the server
             self.log.add(f"Scan failed: {e}", "error")
             self._set(running=False, phase="failed", error=str(e))
+
+    def _enrich(self, src_ip, net):
+        """Fill in missing MACs (Windows ARP lookup, only for hosts we found) and MAC manufacturers."""
+        subnet = str(net)
+        devs = self.store.devices(subnet)
+        need_mac = sorted({d["ip"] for d in devs if not d["mac"] and "|" not in d["key"] and d["ip"] != src_ip})
+        got = 0
+        if need_mac:
+            for ip, mac in self._sweep("Looking up MAC addresses", need_mac, lambda ip: self.prober.arp(ip, src_ip)):
+                self.store.upsert_device(subnet, ip, ip, "arp", mac=mac)
+                got += 1
+        named = 0
+        self._set(phase="Looking up manufacturers", done=0, total=1)
+        for d in self.store.devices(subnet):
+            if d["mac"] and not d["mac_vendor"]:
+                v = oui.lookup(d["mac"])
+                if v:
+                    self.store.upsert_device(subnet, d["key"], d["ip"], d["sources"].split(",")[0] or "arp",
+                                             mac_vendor=v)
+                    named += 1
+        if got or named:
+            self.log.add(f"Filled in {got} MAC address(es) and {named} manufacturer(s)"
+                         f"{'' if oui.available() else ' (manufacturer list unavailable – scapy missing)'}")
 
     def _hosts(self, src_ip, net):
         if net.num_addresses - 2 > MAX_SWEEP_HOSTS:
