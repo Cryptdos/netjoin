@@ -106,6 +106,14 @@ class StoreAndJoin(unittest.TestCase):
         self.engine.dhcp()
         self.assertEqual(self.engine.rejoin()["attempts"], 1)   # goes straight to the last worked IP
 
+    def test_narrowed_range_skips_last_worked(self):
+        self.engine.join(self.net["id"])                                   # works on .201
+        self.store.update_node(self.net["id"], {"range_start": "10.20.5.202", "range_end": "10.20.5.254"})
+        n = self.store.node(self.net["id"])
+        self.assertEqual(self.engine.candidates(n)[0], "10.20.5.202")      # .201 is now outside the range
+        self.assertEqual(self.engine.join(self.net["id"])["ip"], "10.20.5.202")
+        self.assertEqual(self.engine.candidates(n, "10.20.5.201"), ["10.20.5.201"])   # clicking it in history still works
+
     def test_gateway_inheritance(self):
         self.store.set_setting("global", {"gw_override": 1, "gateway": "10.20.5.1", "dns_override": 1, "dns": "1.1.1.1"})
         r = self.store.resolve_gateway_dns(self.net["id"])

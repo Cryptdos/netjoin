@@ -57,12 +57,17 @@ async function withBusy(btn, fn) {
   finally { state.busy = false; btn && btn.classList.remove("busy"); btn && (btn.disabled = false); refreshLog(); }
 }
 
-function flash(msg, level = "info") {
-  const b = $("#banner");
-  b.textContent = msg; b.hidden = false;
-  b.style.background = level === "error" ? "var(--err-bg)" : "var(--accent-bg)";
-  b.style.color = level === "error" ? "var(--err)" : "var(--accent-d)";
-  clearTimeout(flash.t); flash.t = setTimeout(() => (b.hidden = true), 7000);
+// Toast notifications: float over the page (top right), so nothing shifts.
+function flash(msg, level = "info", opts = {}) {
+  const box = $("#toasts");
+  const key = opts.key || null;
+  if (key) { const old = box.querySelector(`[data-key="${key}"]`); if (old) old.remove(); }
+  const t = el("div", { class: `toast ${level}`, role: level === "error" ? "alert" : "status", "data-key": key },
+    el("span", { class: "msg" }, msg),
+    el("button", { type: "button", class: "x", "aria-label": "Dismiss", onclick: () => t.remove() }, "✕"));
+  box.append(t);
+  while (box.childElementCount > 4) box.firstElementChild.remove();
+  if (!opts.sticky) setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 250); }, level === "info" ? 5000 : 10000);
 }
 
 // ---------- status bar ----------
@@ -82,12 +87,15 @@ async function refreshStatus() {
       cur.append(el("span", { class: "inet" + i.cls, title: s.internet === 2 ? "Reaches the internet by IP, but no DNS server answers, so web pages won't load. Set DNS on the network (Edit → Override DNS)." : null }, globe(i.off), i.text));
     }
     cur.append(el("button", { type: "button", class: "btn small", onclick: (e) => withBusy(e.currentTarget, async () => {
-      const r = await api("/internet", { method: "POST" }); if (r.internet === 2) flash(r.detail, "error"); await refreshStatus(); }) }, "Check internet"));
+      const r = await api("/internet", { method: "POST" }); if (r.internet === 2) flash(r.detail, "warn"); await refreshStatus(); }) }, "Check internet"));
   }
   const rj = $("#rejoinBtn");
   if (s.last_network && !s.joined) { rj.hidden = false; rj.textContent = `Rejoin ${s.last_network.network}`; }
   else rj.hidden = true;
-  if (!s.admin) { const b = $("#banner"); b.hidden = false; b.textContent = "NetJoin isn't running as administrator, so Join and DHCP won't work. Close it and start it again, accepting the Windows prompt."; }
+  if (!s.admin && !refreshStatus.adminWarned) {
+    refreshStatus.adminWarned = true;
+    flash("NetJoin isn't running as administrator, so Join and DHCP won't work. Quit it and start it again, accepting the Windows prompt.", "error", { sticky: true, key: "admin" });
+  }
 }
 
 async function refreshAdapters() {
@@ -211,7 +219,7 @@ async function doJoin(btn, ip) {
   const d = state.detail; if (!d) return;
   await withBusy(btn, async () => {
     const r = await api("/join", { method: "POST", body: { network_id: d.id, ip } });
-    flash(`Joined ${d.name} as ${r.ip}/${r.prefix}${r.attempts > 1 ? ` (after ${r.attempts - 1} clash${r.attempts > 2 ? "es" : ""})` : ""} · ${inetInfo(r.internet).text.toLowerCase()}`, r.internet === 2 ? "error" : "info");
+    flash(`Joined ${d.name} as ${r.ip}/${r.prefix}${r.attempts > 1 ? ` (after ${r.attempts - 1} clash${r.attempts > 2 ? "es" : ""})` : ""} · ${inetInfo(r.internet).text}`, r.internet === 2 ? "warn" : "info");
   });
   await Promise.all([refreshStatus(), refreshTree()]); await refreshDetail();
 }

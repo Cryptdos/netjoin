@@ -66,13 +66,12 @@ class Engine:
             if not ipcalc.in_subnet(explicit_ip, net):
                 raise JoinError(f"{explicit_ip} isn't a usable address in {net}")
             return [explicit_ip]
+        allowed = list(ipcalc.iter_range(network["range_start"], network["range_end"], net))
         order = []
         last = self.store.last_worked_ip(network["id"])
-        if last and ipcalc.in_subnet(last, net):
+        if last and last in allowed:          # reuse the last good address only if it's still in the range
             order.append(last)
-        for ip in ipcalc.iter_range(network["range_start"], network["range_end"], net):
-            if ip not in order:
-                order.append(ip)
+        order.extend(ip for ip in allowed if ip not in order)
         return order
 
     def next_ip(self, network: dict) -> str | None:
