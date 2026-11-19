@@ -29,7 +29,17 @@ Design notes: [docs/network-join-tool.md](docs/network-join-tool.md)
    `--fake` is **demo mode**: a pretend set of adapters, nothing on your PC changes. Addresses ending .200 and .230 act as "already taken" so you can see the clash handling.
 3. For real use: `run.bat` (Windows asks for admin, which is needed to change IP settings).
 
-Other options: `--port 8766`, `--no-browser`, `--no-elevate`.
+Other options: `--port 8766`, `--no-browser`, `--no-elevate`, `--console` (run in a console window instead of the taskbar icon).
+
+## Taskbar icon
+
+NetJoin runs in the background with an icon in the notification area (bottom right; it may be under the ^ arrow):
+
+- **Left-click** opens NetJoin in your browser.
+- **Right-click** → Open NetJoin · Open data folder · Quit.
+- **Quit** asks whether to switch the adapter back to DHCP if NetJoin left it on a site IP (Yes / No / Cancel).
+- Starting NetJoin again while it's running just opens the browser.
+- If it can't start, a pop-up shows the error; details are in `netjoin-error.log` in the data folder.
 
 Running it a second time while it's already running just opens the browser again.
 
@@ -38,7 +48,7 @@ Running it a second time while it's already running just opens the browser again
 ```bat
 build.bat
 ```
-Produces `dist\NetJoin\NetJoin.exe` (plus its support files) and `dist\NetJoin-<version>.zip`. Unzip anywhere and run `NetJoin.exe`; there's no installer and Python isn't needed. The exe asks for admin when it starts.
+Produces `dist\NetJoin\NetJoin.exe` with the NetJoin icon (plus its support files in `_internal`) and `dist\NetJoin-<version>.zip`. Unzip anywhere and run `NetJoin.exe`; there's no installer and Python isn't needed. The exe asks for admin when it starts.
 
 ## Npcap (optional)
 
@@ -67,3 +77,7 @@ Install [Npcap](https://npcap.com) to unlock passive listening and a faster raw 
 ```bat
 python -m unittest discover tests
 ```
+
+## Icon
+
+`tools/make_icon.py` draws the icon and writes `netjoin/static/netjoin.ico`, `favicon.png` and `icon-256.png` (needs Pillow).

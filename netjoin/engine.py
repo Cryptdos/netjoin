@@ -167,6 +167,16 @@ class Engine:
             self.log.add(f"{a.name} set back to DHCP")
             return {"ok": True}
 
+    def still_applied(self) -> dict | None:
+        """The static IP NetJoin last applied, if that adapter still has it (used when quitting)."""
+        applied = self.store.get_setting("applied")
+        if not applied:
+            return None
+        a = self.backend.get_adapter(applied.get("adapter", ""))
+        if a and any(x.ip == applied.get("ip") for x in a.addresses):
+            return applied
+        return None
+
     def rejoin(self) -> dict:
         last = self.store.get_setting("last_network")
         if not last or not self.store.node(last.get("network_id", -1)):

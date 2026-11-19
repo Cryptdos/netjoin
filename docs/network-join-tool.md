@@ -172,6 +172,14 @@ Sidebar button **Discover networks on the wire…** opens a wizard: *listen time
 - Dialogs (node editor, settings, Discover) go single-column on small screens.
 - **Activity log** is a bar pinned to the bottom: tap to open/close (remembered). Closed, it shows the latest message (two lines on narrow screens); open, newest first with long messages wrapped. Starts closed below 600 px, open on wider screens.
 
+### v0.5.0 – icon and taskbar app
+
+- **Custom icon** (network tree, joined device highlighted) for the exe, the taskbar icon and the browser tab. Drawn by `tools/make_icon.py`.
+- **Runs from the notification area**, no console window: left-click opens the web page; right-click → Open NetJoin, Open data folder, Quit. A toast says it's running on start. Uses `pystray` + `Pillow`.
+- **Quit** checks whether the adapter still has the IP NetJoin applied; if so it asks *back to DHCP and quit / leave the IP and quit / cancel*.
+- Startup errors show in a pop-up and are written to `netjoin-error.log` in the data folder. `--console` keeps the old console-window mode.
+- **Single-file exe: decided against.** It unpacks to a temp folder on every start, which is slower and more likely to be flagged by antivirus. The build stays a folder (`NetJoin.exe` + `_internal`) shipped as a zip.
+
 ### Ideas / feasibility notes
 
 - **Discover, then join**: see *Network setup → Discover* above.

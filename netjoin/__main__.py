@@ -50,6 +50,7 @@ def main() -> None:
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--no-elevate", action="store_true", help="don't ask for admin (Join/DHCP will be disabled)")
     ap.add_argument("--version", action="version", version=f"{APP_NAME} {__version__}")
+    ap.add_argument("--console", action="store_true", help="run in this window instead of the taskbar icon")
     args = ap.parse_args()
     url = f"http://127.0.0.1:{args.port}/"
 
@@ -89,10 +90,33 @@ def main() -> None:
 
     scans = ScanManager(engine, get_prober(backend.kind))
     app = build_app(engine, args.port, scans)
-    if not args.no_browser:
-        threading.Timer(1.2, webbrowser.open, [url]).start()
-    print(f"{APP_NAME} {__version__} running at {url}  (close this window to stop)")
-    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning", log_config=None)
+    config = uvicorn.Config(app, host="127.0.0.1", port=args.port, log_level="warning", log_config=None)
+    server = uvicorn.Server(config)
+
+    from . import tray
+    use_tray = sys.platform == "win32" and not args.console and tray.available()
+    if not use_tray:
+        if not args.no_browser:
+            threading.Timer(1.2, webbrowser.open, [url]).start()
+        print(f"{APP_NAME} {__version__} running at {url}  (close this window to stop)")
+        server.run()
+        return
+
+    # Taskbar mode: server in the background, tray icon in the foreground until Quit.
+    t = threading.Thread(target=server.run, name="netjoin-server", daemon=True)
+    t.start()
+    for _ in range(50):                 # wait up to 5 s for the port to be ready
+        if server.started or not t.is_alive():
+            break
+        threading.Event().wait(0.1)
+    if not t.is_alive():
+        raise RuntimeError(f"The local server couldn't start on port {args.port} (is another program using it?)")
+
+    def stop_server():
+        server.should_exit = True
+        t.join(5)
+
+    tray.run(url, engine, stop_server)
 
 
 def run() -> None:
@@ -102,9 +126,23 @@ def run() -> None:
         pass
     except Exception:
         import traceback
-        traceback.print_exc()
+        details = traceback.format_exc()
+        log_file = None
+        try:
+            log_file = paths.data_dir() / "netjoin-error.log"
+            log_file.write_text(details, encoding="utf-8")
+        except Exception:
+            pass
+        if sys.stdout is not None:
+            print(details)
         if sys.platform == "win32":
-            input("\nNetJoin hit an error (details above). Press Enter to close...")
+            if sys.stdout is None or getattr(sys, "frozen", False):   # no console to read: show a pop-up
+                from .tray import MB_ICONERROR, message_box
+                last = details.strip().splitlines()[-1]
+                message_box(f"NetJoin couldn't start:\n\n{last}\n\nFull details: {log_file}",
+                            f"{APP_NAME} error", MB_ICONERROR)
+            else:
+                input("\nNetJoin hit an error (details above). Press Enter to close...")
         raise SystemExit(1)
 
 
