@@ -178,6 +178,15 @@ def scan_cancel(req, data):
     return {"ok": True}
 
 
+def discover_start(req, data):
+    return SCANS.start_discover(int(data.get("seconds", 20)), bool(data.get("whois", True)))
+
+
+def discover_status(req, data):
+    return {"state": SCANS.status(), "result": SCANS.discover_result, "npcap": SCANS.npcap_ok(),
+            "demo": eng().backend.kind == "fake"}
+
+
 def devices(req, data):
     subnet = req.query_params.get("subnet", "")
     rows = eng().store.devices(subnet)
@@ -250,6 +259,8 @@ def build_app(engine: Engine, port: int, scans: ScanManager) -> Starlette:
         Route("/api/scan", api(scan_status)),
         Route("/api/scan", api(scan_start), methods=["POST"]),
         Route("/api/scan/cancel", api(scan_cancel), methods=["POST"]),
+        Route("/api/discover", api(discover_status)),
+        Route("/api/discover", api(discover_start), methods=["POST"]),
         Route("/api/devices", api(devices)),
         Route("/api/devices", api(clear_devices), methods=["DELETE"]),
         Route("/api/log", api(log)),

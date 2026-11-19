@@ -33,7 +33,7 @@
     <div class="spacer"></div>
     <div class="side-actions">
       <button type="button" class="btn" id="addSiteBtn">+ Add site</button>
-      <button type="button" class="btn btn-outline" disabled title="Arrives in Phase 3">Discover networks on the wire…</button>
+      <button type="button" class="btn btn-outline" id="discoverBtn">Discover networks on the wire…</button>
     </div>
   </nav>
 
@@ -139,6 +139,34 @@
       <button type="button" class="btn" id="cancelSettings">Close</button>
       <button type="submit" class="btn btn-primary">Save</button></div>
   </form>
+</dialog>
+
+<dialog id="discoverDlg" class="wide">
+  <div class="dlg">
+    <div class="row"><h2>Discover networks on the wire</h2><div class="spacer"></div>
+      <button type="button" class="btn icon" id="discoverClose" aria-label="Close">✕</button></div>
+    <section id="discSetup">
+      <p class="muted">Plug into the BMS network and run this before you know its IP range. NetJoin listens to the traffic on the cable and asks BACnet devices to identify themselves, then suggests the subnet and a free address range. It doesn't matter what IP the laptop has at the moment, so DHCP or 169.254.x is fine.</p>
+      <p class="note-warn" id="discNpcapNote" hidden></p>
+      <div class="row">
+        <label class="inline">Listen for
+          <select id="discSeconds"><option value="10">10 s</option><option value="20" selected>20 s</option><option value="30">30 s</option><option value="60">60 s</option></select></label>
+        <label class="check"><input type="checkbox" id="discWhois" checked> Also send a BACnet Who-Is (recommended)</label>
+      </div>
+      <p class="small muted" id="discAdapter"></p>
+      <div class="row"><div class="spacer"></div><button type="button" class="btn btn-primary" id="discStart">Start</button></div>
+    </section>
+    <section id="discRunning" hidden>
+      <div class="row"><span id="discPhase" class="small"></span><div class="spacer"></div>
+        <button type="button" class="btn small" id="discCancel">Stop early</button></div>
+      <div class="bar"><div id="discBar"></div></div>
+    </section>
+    <section id="discResults" hidden>
+      <div class="row"><span id="discSummary" class="small muted"></span><div class="spacer"></div>
+        <button type="button" class="btn small" id="discAgain">Run again</button></div>
+      <div id="discList" class="disc-list"></div>
+    </section>
+  </div>
 </dialog>
 
 <script src="/static/app.js"></script>

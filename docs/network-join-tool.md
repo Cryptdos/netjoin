@@ -4,7 +4,7 @@ _Last updated: 2026-11-19_
 
 App name: **NetJoin**. Target: Windows 10+, engineers have local admin.
 
-**Build phases:** 1 – tree, Join + clash check, DHCP / rejoin, history, internet check, gateway / DNS overrides, SQLite *(built, v0.1.0 – tested on Windows 2026-11-19: Join, clash detection via DAD, gateway override, Revert to DHCP all working)* · 2 – scans (ARP, ping, BACnet Who-Is, port check, Npcap detection) *(built, v0.2.1 – tested on Windows)* · 3 – Discover wizard, exe packaging polish · 4 – responsive layout for narrow windows (split-screen tabs, small browser windows), after all features are done.
+**Build phases:** 1 – tree, Join + clash check, DHCP / rejoin, history, internet check, gateway / DNS overrides, SQLite *(built, v0.1.0 – tested on Windows 2026-11-19: Join, clash detection via DAD, gateway override, Revert to DHCP all working)* · 2 – scans (ARP, ping, BACnet Who-Is, port check, Npcap detection) *(built, v0.2.1 – tested on Windows)* · 3 – Discover wizard, exe packaging polish *(built, v0.3.0 – needs testing on Windows)* · 4 – responsive layout for narrow windows (split-screen tabs, small browser windows), after all features are done.
 
 ## Concept
 
@@ -143,6 +143,24 @@ Goal: locate hosts and controllers on the current subnet, and find BMS networks 
 - **This PC:** the scanning computer is listed as "This PC" with its hostname and MAC (not "This laptop", since it may be a desktop).
 - **Tested on Windows 2026-11-19:** Npcap ARP sweep, ping sweep, port check, passive listen and BACnet Who-Is all worked; a Trend IQ4E answered Who-Is and reported name "IQ4E-LAB", model "IQ4E" and vendor "Trend Control Systems Ltd".
 - **Npcap detection:** `System32\Npcap\wpcap.dll`. Status and reason shown in Settings; Npcap-only options are greyed out with "Needs Npcap".
+
+### Phase 3 – Discover, as built (v0.3.0)
+
+Sidebar button **Discover networks on the wire…** opens a wizard: *listen time (10/20/30/60 s) · "also send BACnet Who-Is" · Start → results → Save as network / Save & Join*.
+
+- **Works from any laptop IP** (static, DHCP, or 169.254.x when there's no DHCP server).
+- **With Npcap:** sniffs ARP and all broadcast UDP (NetBIOS, DHCP, BACnet, discovery protocols) for the chosen time, and sends one global Who-Is to 255.255.255.255 after 1 s. Raw capture sees replies even when they're addressed to a subnet the laptop isn't on.
+- **Without Npcap:** Who-Is only, using a normal socket. Devices that reply by broadcast to their *own* subnet (e.g. 10.20.5.255) may be dropped by Windows when the laptop is on another subnet; the wizard says so and recommends Npcap.
+- **Working out the subnet:**
+  - A directed broadcast (e.g. senders 10.20.5.x → 10.20.5.255) gives the mask. If /24 fits it's used (most common on BMS); otherwise the largest network that fits all the senders. Marked **"mask from broadcasts"**.
+  - Hosts with no broadcast evidence are grouped into a **"guessed /24"**.
+  - An address that two or more devices ARP for is shown as the **likely gateway** (information only – gateway stays off by default).
+- **Suggested laptop range:** .200–.254 if no device was seen there; otherwise the highest run of ≥20 free addresses; otherwise .200–.254 with a warning (Join skips clashes anyway).
+- **Already saved?** A subnet that matches a saved network shows "Saved as Site › Area › Network" with **Open** and **Join**.
+- **Save as network:** pick an existing site or create one, optionally an area (existing or new), name (default "BMS 10.20.5.x" when BACnet devices were found), subnet and range are editable. **Save & Join** joins straight away.
+- Off-subnet discovery doesn't read BACnet device names (those replies can't route back); run a Scan after joining to get names, models and MACs.
+
+**Packaging:** `build.bat` runs the tests, builds `dist\NetJoin\NetJoin.exe` (asks for admin via UAC manifest) and zips it to `dist\NetJoin-<version>.zip`. Console window title shows the version. `NetJoin.exe --version` prints it.
 
 ### Ideas / feasibility notes
 

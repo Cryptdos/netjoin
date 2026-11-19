@@ -9,7 +9,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
-from . import npcap, oui
+from . import discover, npcap, oui
 from .probes import BMS_PORTS, Prober
 
 MAX_SWEEP_HOSTS = 1024
@@ -37,6 +37,7 @@ class ScanManager:
         self._lock = threading.Lock()
         self._cancel = threading.Event()
         self.state: dict = {"running": False}
+        self.discover_result: dict | None = None
 
     # ---------- public ----------
     def options(self) -> list[dict]:
@@ -80,6 +81,68 @@ class ScanManager:
                           "started": datetime.now().strftime("%H:%M:%S"), "error": None}
         threading.Thread(target=self._run, args=(kind, a.name, p.ip, here), daemon=True).start()
         return self.status()
+
+    def npcap_ok(self) -> bool:
+        return self.prober.kind == "windows" and npcap.status()["available"]
+
+    def start_discover(self, seconds: int = 20, send_whois: bool = True) -> dict:
+        seconds = max(5, min(int(seconds), 120))
+        a = self.engine.adapter()
+        p = a.primary
+        if not p:
+            raise ScanError(f"{a.name} has no IPv4 address. Set it to DHCP (it will pick a 169.254 address "
+                            "if there's no DHCP server) and try again.")
+        use_npcap = self.npcap_ok()
+        if not use_npcap and not send_whois and self.prober.kind != "fake":
+            raise ScanError("Without Npcap, Discover can only use the BACnet Who-Is – tick it, or install Npcap")
+        with self._lock:
+            if self.state.get("running"):
+                raise ScanError("A scan is already running")
+            self._cancel.clear()
+            self.discover_result = None
+            self.state = {"running": True, "kind": "discover", "label": "Discover", "subnet": None,
+                          "adapter": a.name, "phase": "listening" if use_npcap else "BACnet Who-Is",
+                          "done": 0, "total": seconds, "found": 0,
+                          "started": datetime.now().strftime("%H:%M:%S"), "error": None}
+        threading.Thread(target=self._run_discover, args=(a.name, p.ip, seconds, send_whois, use_npcap),
+                         daemon=True).start()
+        return self.status()
+
+    def _run_discover(self, adapter, src_ip, seconds, send_whois, use_npcap):
+        how = ("listening" + (" + BACnet Who-Is" if send_whois else "")) if use_npcap else "BACnet Who-Is only (no Npcap)"
+        self.log.add(f"Discover on {adapter} ({src_ip}) for {seconds} s: {how}")
+        try:
+            obs = discover.run(self.prober, adapter, src_ip, seconds, send_whois, use_npcap,
+                               self._cancel.is_set, self.log.add, lambda d: self._set(done=int(d)))
+            self._set(phase="working out subnets", done=seconds)
+            known: dict[str, list] = {}
+            for n in self._all_networks():
+                known.setdefault(n["subnet"], []).append(
+                    {"id": n["id"], "name": n["name"], "path": " › ".join(self.store.path_names(n["id"]))})
+            result = discover.analyse(obs, src_ip, known)
+            self.discover_result = {"subnets": result, "npcap": use_npcap, "whois": send_whois,
+                                    "src_ip": src_ip, "adapter": adapter,
+                                    "finished": datetime.now().strftime("%H:%M:%S")}
+            if self._cancel.is_set():
+                self.log.add("Discover cancelled", "warn")
+            summary = ", ".join(f"{r['subnet']} ({r['host_count']} host(s){', ' + str(r['bacnet_count']) + ' BACnet' if r['bacnet_count'] else ''})"
+                                for r in result) or "nothing heard"
+            self.log.add(f"Discover found {len(result)} subnet(s): {summary}")
+            self._set(running=False, phase="done", found=len(result))
+        except Exception as e:
+            self.log.add(f"Discover failed: {e}", "error")
+            self._set(running=False, phase="failed", error=str(e))
+
+    def _all_networks(self):
+        out = []
+
+        def walk(nodes):
+            for n in nodes:
+                if n["kind"] == "network":
+                    out.append(n)
+                walk(n.get("children", []))
+        walk(self.store.tree())
+        return out
 
     # ---------- worker ----------
     def _set(self, **kw):

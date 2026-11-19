@@ -13,7 +13,9 @@ Design notes: [docs/network-join-tool.md](docs/network-join-tool.md)
 
 **Phase 2 (v0.2.0):** Scan menu – ARP sweep, ping sweep, BACnet Who-Is (reads device name, model and vendor; finds devices behind MS/TP routers), BMS port check with clickable web UI links, passive listen (Npcap), and a device list per network with BACnet / Other filters.
 
-Next: Phase 3 Discover wizard and exe polish. Phase 4 layout for narrow windows.
+**Phase 3 (v0.3.0):** **Discover networks on the wire** – plug into an unknown BMS network, listen and broadcast a BACnet Who-Is, and NetJoin works out the subnet(s), the likely gateway and a free laptop range, then saves the network and joins it. Build script now produces a ready-to-share zip.
+
+Next: Phase 4 layout for narrow windows (split-screen, small browser windows).
 
 ## Quick start (from source)
 
@@ -36,7 +38,7 @@ Running it a second time while it's already running just opens the browser again
 ```bat
 build.bat
 ```
-Produces `dist\NetJoin\NetJoin.exe` (plus its support files). Zip the `dist\NetJoin` folder to share it; there's no installer. The exe asks for admin when it starts.
+Produces `dist\NetJoin\NetJoin.exe` (plus its support files) and `dist\NetJoin-<version>.zip`. Unzip anywhere and run `NetJoin.exe`; there's no installer and Python isn't needed. The exe asks for admin when it starts.
 
 ## Npcap (optional)
 

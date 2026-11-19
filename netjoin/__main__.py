@@ -49,8 +49,16 @@ def main() -> None:
     ap.add_argument("--fake", action="store_true", help="use the in-memory demo back-end (changes nothing)")
     ap.add_argument("--no-browser", action="store_true")
     ap.add_argument("--no-elevate", action="store_true", help="don't ask for admin (Join/DHCP will be disabled)")
+    ap.add_argument("--version", action="version", version=f"{APP_NAME} {__version__}")
     args = ap.parse_args()
     url = f"http://127.0.0.1:{args.port}/"
+
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.kernel32.SetConsoleTitleW(f"{APP_NAME} {__version__} – close this window to stop")
+        except Exception:
+            pass
 
     if already_running(args.port):
         print(f"{APP_NAME} is already running – opening {url}")

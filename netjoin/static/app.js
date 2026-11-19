@@ -325,6 +325,159 @@ $("#clearDevices").addEventListener("click", async () => {
   await api(`/devices?subnet=${encodeURIComponent(d.subnet)}`, { method: "DELETE" }); refreshDevices(); refreshLog();
 });
 
+// ---------- discover ----------
+const disc = { timer: null };
+function discShow(view) { for (const v of ["discSetup", "discRunning", "discResults"]) $("#" + v).hidden = v !== view; }
+
+$("#discoverBtn").addEventListener("click", async () => {
+  const r = await api("/discover").catch(() => null);
+  const s = state.status || {};
+  $("#discAdapter").textContent = s.adapter ? `Runs from ${s.adapter.name}${s.primary ? ` (currently ${s.primary.ip}/${s.primary.prefix})` : ""}. Change the adapter at the top if that's not the BMS cable.` : "Pick an adapter at the top first.";
+  const note = $("#discNpcapNote");
+  if (r && !r.npcap && !r.demo) {
+    note.hidden = false;
+    note.textContent = "Npcap isn't installed, so NetJoin can only use the BACnet Who-Is. Replies from devices on a different subnet to the laptop may not get through. Install Npcap (npcap.com) for full listening.";
+  } else note.hidden = true;
+  $("#discoverDlg").showModal();
+  if (r && r.state && r.state.kind === "discover" && r.state.running) { discShow("discRunning"); discPoll(); }
+  else if (r && r.result) { discShow("discResults"); renderDiscover(r.result); }
+  else discShow("discSetup");
+});
+$("#discoverClose").addEventListener("click", () => $("#discoverDlg").close());
+$("#discAgain").addEventListener("click", () => discShow("discSetup"));
+$("#discCancel").addEventListener("click", () => api("/scan/cancel", { method: "POST" }).catch(() => {}));
+$("#discStart").addEventListener("click", async (e) => {
+  try {
+    await api("/discover", { method: "POST", body: { seconds: Number($("#discSeconds").value), whois: $("#discWhois").checked } });
+  } catch (err) { flash(err.message, "error"); return; }
+  discShow("discRunning"); discPoll();
+});
+
+async function discPoll() {
+  clearTimeout(disc.timer);
+  const r = await api("/discover").catch(() => null);
+  if (!r) return;
+  const st = r.state;
+  if (st.running) {
+    $("#discPhase").textContent = `${st.phase} – ${st.done}/${st.total} s`;
+    $("#discBar").style.width = `${Math.round((st.done / Math.max(1, st.total)) * 100)}%`;
+    disc.timer = setTimeout(discPoll, 600);
+    return;
+  }
+  refreshLog();
+  if (st.error) { flash(st.error, "error"); discShow("discSetup"); return; }
+  discShow("discResults"); renderDiscover(r.result);
+}
+
+function flatAreas(site) {
+  const out = [];
+  const walk = (nodes, depth, path) => { for (const n of nodes) if (n.kind === "area") {
+    out.push({ id: n.id, label: "  ".repeat(depth) + n.name, path: [...path, n.name] }); walk(n.children || [], depth + 1, [...path, n.name]); } };
+  walk(site ? site.children || [] : [], 0, []);
+  return out;
+}
+
+function renderDiscover(res) {
+  const list = $("#discList");
+  if (!res) { list.replaceChildren(); return; }
+  $("#discSummary").textContent = `Finished ${res.finished} from ${res.adapter} (${res.src_ip})` +
+    (res.npcap ? " · listened with Npcap" : " · Who-Is only") ;
+  if (!res.subnets.length) {
+    list.replaceChildren(el("div", { class: "empty" }, "Nothing heard. Check the cable and the adapter, try a longer listen, or install Npcap so NetJoin can hear traffic that isn't BACnet."));
+    return;
+  }
+  list.replaceChildren(...res.subnets.map((r) => discCard(r)));
+}
+
+function discCard(r) {
+  const card = el("div", { class: "dcard" });
+  const pill = r.confidence === "high" ? el("span", { class: "pill yes" }, "mask from broadcasts") : el("span", { class: "pill guess" }, "guessed /24");
+  const counts = `${r.host_count} device(s)${r.bacnet_count ? ` · ${r.bacnet_count} BACnet` : ""}`;
+  const hostTable = el("table", {}, el("thead", {}, el("tr", {}, ["IP", "MAC", "Maker", "BACnet"].map((h) => el("th", {}, h)))),
+    el("tbody", {}, r.hosts.map((h) => el("tr", {}, el("td", { class: "mono" }, h.ip), el("td", { class: "mono" }, h.mac || "—"),
+      el("td", {}, h.mac_vendor || "—"),
+      el("td", {}, h.bacnet.length ? h.bacnet.map((b) => `#${b.instance}${b.vendor ? " " + b.vendor : b.vendor_id != null ? " vendor " + b.vendor_id : ""}${b.route ? " (" + b.route + ")" : ""}`).join(", ") : "—")))));
+  const actions = el("div", { class: "row" });
+  card.append(
+    el("div", { class: "row" }, el("h3", {}, r.subnet), pill, el("span", { class: "small muted" }, counts), el("div", { class: "spacer" }), actions),
+    el("div", { class: "meta" }, r.evidence.join(" · ") +
+      (r.gateway_hint ? ` · devices ARP for ${r.gateway_hint}, probably the gateway (NetJoin leaves the gateway off unless you set it)` : "")),
+    el("div", { class: "meta" }, `Suggested laptop range ${r.range_start} – ${r.range_end}` +
+      (r.range_clashes ? ` (${r.range_clashes} device(s) seen inside it – Join will skip them)` : " (no devices seen there)")),
+    el("details", {}, el("summary", {}, `Show ${r.host_count} device(s)`), hostTable));
+  if (r.saved_as && r.saved_as.length) {
+    const n = r.saved_as[0];
+    actions.append(el("span", { class: "small muted" }, `Saved as ${n.path}`),
+      el("button", { type: "button", class: "btn small", onclick: async () => { $("#discoverDlg").close(); await openNetwork(n.id); } }, "Open"),
+      el("button", { type: "button", class: "btn small btn-primary", onclick: async (e) => { $("#discoverDlg").close(); await openNetwork(n.id); doJoin(null); } }, "Join"));
+  } else {
+    actions.append(el("button", { type: "button", class: "btn small btn-primary", onclick: () => { actions.hidden = true; card.append(saveForm(r, card)); } }, "Save as network…"));
+  }
+  return card;
+}
+
+function saveForm(r, card) {
+  const sites = state.tree.filter((n) => n.kind === "site");
+  const siteSel = el("select", {}, ...sites.map((s) => el("option", { value: s.id }, s.name)), el("option", { value: "new" }, "New site…"));
+  if (!sites.length) siteSel.value = "new";
+  const newSite = el("input", { placeholder: "Site name" });
+  const areaSel = el("select", {});
+  const newArea = el("input", { placeholder: "Area name" });
+  const syncSite = () => {
+    newSite.parentElement.hidden = siteSel.value !== "new";
+    const site = sites.find((s) => String(s.id) === siteSel.value);
+    areaSel.replaceChildren(el("option", { value: "" }, "(directly under the site)"),
+      ...flatAreas(site).map((a) => el("option", { value: a.id }, a.label)), el("option", { value: "new" }, "New area…"));
+    syncArea();
+  };
+  const syncArea = () => { newArea.parentElement.hidden = areaSel.value !== "new"; };
+  const name = el("input", { value: r.bacnet_count ? `BMS ${r.subnet.split("/")[0].split(".").slice(0, 3).join(".")}.x` : `Network ${r.subnet}` });
+  const subnet = el("input", { class: "mono", value: r.subnet });
+  const rs = el("input", { class: "mono", value: r.range_start }); const re = el("input", { class: "mono", value: r.range_end });
+  const err = el("p", { class: "error full" });
+  const save = async (join) => {
+    err.textContent = "";
+    try {
+      let parent;
+      if (siteSel.value === "new") {
+        if (!newSite.value.trim()) throw new Error("Give the new site a name");
+        parent = (await api("/nodes", { method: "POST", body: { kind: "site", name: newSite.value.trim(), parent_id: null } })).id;
+      } else parent = Number(siteSel.value);
+      if (areaSel.value === "new") {
+        if (!newArea.value.trim()) throw new Error("Give the new area a name");
+        parent = (await api("/nodes", { method: "POST", body: { kind: "area", name: newArea.value.trim(), parent_id: parent } })).id;
+      } else if (areaSel.value) parent = Number(areaSel.value);
+      const n = await api("/nodes", { method: "POST", body: { kind: "network", parent_id: parent, name: name.value,
+        subnet: subnet.value.trim(), range_start: rs.value.trim(), range_end: re.value.trim() } });
+      $("#discoverDlg").close();
+      await openNetwork(n.id);
+      flash(`Saved ${n.name} (${n.subnet})`);
+      if (join) doJoin(null);
+    } catch (e) { err.textContent = e.message; }
+  };
+  const lab = (t, input, cls) => el("label", { class: cls || null }, t, input);
+  const form = el("div", { class: "saveform" },
+    lab("Site", siteSel), lab("New site name", newSite),
+    lab("Area", areaSel), lab("New area name", newArea),
+    lab("Network name", name, "full"), lab("Subnet", subnet, "full"),
+    lab("Laptop range from", rs), lab("to", re), err,
+    el("div", { class: "row full" }, el("div", { class: "spacer" }),
+      el("button", { type: "button", class: "btn", onclick: () => save(false) }, "Save"),
+      el("button", { type: "button", class: "btn btn-primary", onclick: () => save(true) }, "Save & Join")));
+  queueMicrotask(syncSite);
+  siteSel.addEventListener("change", syncSite); areaSel.addEventListener("change", syncArea);
+  return form;
+}
+
+async function openNetwork(id) {
+  await refreshTree();
+  let n = findNode(id);
+  // expand every ancestor so the new network is visible
+  const chain = []; const walk = (nodes, path) => { for (const x of nodes) { if (x.id === id) { chain.push(...path); return true; } if (walk(x.children || [], [...path, x.id])) return true; } return false; };
+  walk(state.tree, []); chain.forEach((a) => state.expanded.add(a));
+  if (n) await select(n);
+}
+
 // ---------- node dialog ----------
 function openNode({ node, parent, kind }) {
   const f = $("#nodeForm"); f.reset(); $("#nodeErr").textContent = "";

@@ -134,3 +134,20 @@ class FakeProber(Prober):
                     "key": f"{b}.10|2:05", "route": "net 2, MAC 5", "vendor": "Siemens Schweiz AG",
                     "name": "RA L2-03 (MS/TP)", "model": "DXR2.M18-101A"})
         return out
+
+    def discover_extra(self) -> dict:
+        """Demo observations: a BMS subnet with broadcasts + BACnet, and a second subnet with no broadcasts."""
+        hosts = {"10.20.5.1": "00-1B-1B-00-00-01", "10.20.5.10": "00-A0-03-11-22-10",
+                 "10.20.5.11": "00-A0-03-11-22-11", "10.20.5.12": "00-A0-03-11-22-12",
+                 "10.20.5.200": "3C-52-82-AA-BB-CC", "192.168.50.20": "00-10-70-15-CA-99",
+                 "192.168.50.21": "00-10-70-15-CA-9A"}
+        bac = []
+        for last, inst in ((10, 2501), (11, 2502), (12, 2503)):
+            ip = f"10.20.5.{last}"
+            bac.append({"instance": inst, "vendor_id": 7, "ip": ip, "port": 47808, "snet": None, "sadr": None,
+                        "key": ip, "route": None, "vendor": "Siemens", "name": None, "model": None})
+        bac.append({"instance": 1011, "vendor_id": 0, "ip": "192.168.50.20", "port": 47808, "snet": None,
+                    "sadr": None, "key": "192.168.50.20", "route": None, "vendor": None, "name": None, "model": None})
+        return {"hosts": hosts, "bacnet": bac,
+                "bcast_sources": {"10.20.5.255": ["10.20.5.10", "10.20.5.11", "10.20.5.12"]},
+                "arp_asks": {"10.20.5.1": ["10.20.5.10", "10.20.5.11"]}}

@@ -139,3 +139,22 @@ table.dev tr.self{background:var(--accent-bg)}
 table.dev .sub2{display:block;font-size:11px;color:var(--muted)}
 .port{display:inline-block;margin:0 4px 2px 0;padding:1px 6px;border:1px solid var(--line);border-radius:4px;font-size:11px;white-space:nowrap}
 table.dev .sub2 a,table.dev td.small{color:var(--muted)}
+
+dialog.wide{width:min(860px,96vw)}
+dialog .dlg{display:flex;flex-direction:column;gap:14px;padding:20px 22px;max-height:88vh;overflow:auto}
+dialog .dlg section{display:flex;flex-direction:column;gap:12px}
+dialog .dlg p{margin:0}
+label.inline{display:inline-flex!important;flex-direction:row!important;align-items:center;gap:8px;font-weight:400!important}
+.note-warn{padding:8px 12px;border-radius:6px;background:var(--warn-bg);color:var(--warn);font-size:13px}
+.disc-list{display:flex;flex-direction:column;gap:12px}
+.dcard{border:1px solid var(--line);border-radius:8px;padding:14px 16px;display:flex;flex-direction:column;gap:8px}
+.dcard h3{margin:0;font:600 18px var(--mono)}
+.dcard .meta{font-size:12px;color:var(--muted)}
+.dcard details summary{cursor:pointer;font-size:13px;color:var(--accent-d)}
+.dcard table{width:100%;border-collapse:collapse;font-size:12px;margin-top:6px}
+.dcard td,.dcard th{padding:4px 8px;border-bottom:1px solid #EEF0F2;text-align:left}
+.dcard td.mono{font-family:var(--mono)}
+.saveform{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:12px;background:var(--bg);border-radius:8px}
+.saveform label{display:flex;flex-direction:column;gap:4px;font-size:12px;font-weight:600;color:var(--muted)}
+.saveform .full{grid-column:1/-1}
+.pill.guess{background:var(--warn-bg);color:var(--warn);border-color:#EFCFB5}
