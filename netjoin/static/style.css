@@ -46,7 +46,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,.btn:focus-visib
 .check input{height:auto}
 .current{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:6px 12px;background:var(--bg);border:1px solid var(--line);border-radius:6px}
 .toasts{position:fixed;top:64px;right:16px;z-index:50;display:flex;flex-direction:column;gap:8px;width:min(420px,calc(100vw - 32px));pointer-events:none}
-.toast{pointer-events:auto;display:flex;align-items:flex-start;gap:10px;padding:10px 12px 10px 14px;border-radius:8px;border:1px solid #B9D0F0;background:var(--accent-bg);color:var(--accent-d);font-weight:500;box-shadow:0 8px 24px rgba(0,0,0,.14);animation:toast-in .2s ease-out}
+.toast{pointer-events:auto;position:relative;overflow:hidden;display:flex;align-items:flex-start;gap:10px;padding:10px 12px 12px 14px;border-radius:8px;border:1px solid #B9D0F0;background:var(--accent-bg);color:var(--accent-d);font-weight:500;box-shadow:0 8px 24px rgba(0,0,0,.14);animation:toast-in .2s ease-out}
 .toast.error{border-color:#E3B4B6;background:var(--err-bg);color:var(--err)}
 .toast.warn{border-color:#EFCFB5;background:var(--warn-bg);color:var(--warn)}
 .toast .msg{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
@@ -54,6 +54,10 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,.btn:focus-visib
 .toast .x:hover{opacity:1}
 .toast.out{opacity:0;transform:translateX(12px);transition:opacity .25s,transform .25s}
 @keyframes toast-in{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+.toast .timer{position:absolute;left:0;bottom:0;height:3px;width:100%;background:currentColor;opacity:.45;transform-origin:left;animation:toast-timer linear forwards}
+.toast:hover .timer,.toast:focus-within .timer{animation-play-state:paused}
+@keyframes toast-timer{from{transform:scaleX(1)}to{transform:scaleX(0)}}
+@media (prefers-reduced-motion: reduce){.toast{animation:none}.toast .timer{opacity:.3}}
 
 .body{flex-grow:1;display:flex;flex-wrap:wrap;align-items:stretch;gap:16px;padding:16px}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px 20px}

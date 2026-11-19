@@ -238,7 +238,7 @@ Sidebar button **Discover networks on the wire…** opens a wizard: *listen time
 **Decided:**
 - **Internet check has three results (v0.5.3):** *Internet* (route **and** a real DNS query to the adapter's DNS servers both work), *Internet by IP only – no DNS* (warning: devices and IPs reachable, web pages won't load), *No internet*. Found in testing: with a gateway but no DNS, the old check said "internet" because Windows had the test name cached and the fallback connected by IP.
 - **Join only reuses the last working IP if it's still inside the allowed range** (v0.5.4; found when narrowing .200 → .202). Clicking an IP in the history still uses exactly that IP.
-- **Messages are toast notifications** (top right, over the page) instead of a bar that pushed the page down: info fades after 5 s, warnings/errors after 10 s, all closable; the "not running as administrator" warning stays until closed.
+- **Messages are toast notifications** (top right, over the page) instead of a bar that pushed the page down: info 2 s, warnings/errors 5 s, with a countdown bar along the bottom; hovering a toast pauses its timer; all closable; the "not running as administrator" warning stays until closed.
 - Node editor has **Use gateway** next to the DNS field (most routers answer DNS).
 - **Gateway and DNS default to None** (blank). Reason: if the laptop gets internet over Wi-Fi, a gateway on the Ethernet adapter can pull internet traffic down the BMS cable and you lose internet.
 - Each level (global › site › area › network) has an **"Override" tick box**. When ticked, that level's gateway / DNS fields are enabled. A network uses the nearest level above it that has an override set.

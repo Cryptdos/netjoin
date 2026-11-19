@@ -58,16 +58,23 @@ async function withBusy(btn, fn) {
 }
 
 // Toast notifications: float over the page (top right), so nothing shifts.
+// A bar along the bottom counts down; hovering pauses it (CSS animation-play-state).
+const TOAST_MS = { info: 2000, warn: 5000, error: 5000 };
 function flash(msg, level = "info", opts = {}) {
   const box = $("#toasts");
   const key = opts.key || null;
   if (key) { const old = box.querySelector(`[data-key="${key}"]`); if (old) old.remove(); }
+  const close = () => { t.classList.add("out"); setTimeout(() => t.remove(), 200); };
+  const bar = opts.sticky ? null : el("div", { class: "timer", "aria-hidden": "true" });
   const t = el("div", { class: `toast ${level}`, role: level === "error" ? "alert" : "status", "data-key": key },
     el("span", { class: "msg" }, msg),
-    el("button", { type: "button", class: "x", "aria-label": "Dismiss", onclick: () => t.remove() }, "✕"));
+    el("button", { type: "button", class: "x", "aria-label": "Dismiss", onclick: close }, "✕"), bar);
+  if (bar) {
+    bar.style.animationDuration = `${TOAST_MS[level] || TOAST_MS.info}ms`;
+    bar.addEventListener("animationend", close);
+  }
   box.append(t);
   while (box.childElementCount > 4) box.firstElementChild.remove();
-  if (!opts.sticky) setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 250); }, level === "info" ? 5000 : 10000);
 }
 
 // ---------- status bar ----------
