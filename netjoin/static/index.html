@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NetJoin</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">NetJoin</span><span class="mono muted small" id="ver"></span></div>
+  <div class="field-inline">
+    <label for="adapter">Adapter</label>
+    <select id="adapter"></select>
+    <label class="small muted check"><input type="checkbox" id="showAll"> all</label>
+  </div>
+  <div class="current" id="current" aria-live="polite">…</div>
+  <div class="spacer"></div>
+  <button type="button" class="btn" id="rejoinBtn" hidden>Rejoin last</button>
+  <button type="button" class="btn btn-strong" id="dhcpBtn">Revert to DHCP</button>
+  <button type="button" class="btn icon" id="settingsBtn" aria-label="Settings" title="Settings">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg>
+  </button>
+</header>
+<div class="banner" id="banner" hidden></div>
+
+<div class="body">
+  <nav class="panel sidebar" aria-label="Sites">
+    <label for="search" class="caps">Sites</label>
+    <input id="search" type="search" placeholder="Search sites, networks, IPs">
+    <ul class="tree" id="tree"></ul>
+    <div class="spacer"></div>
+    <div class="side-actions">
+      <button type="button" class="btn" id="addSiteBtn">+ Add site</button>
+      <button type="button" class="btn btn-outline" disabled title="Arrives in Phase 3">Discover networks on the wire…</button>
+    </div>
+  </nav>
+
+  <main class="main">
+    <section class="panel" id="detail">
+      <div class="empty">Pick a network on the left, or add a site to get started.</div>
+    </section>
+    <div class="lower">
+      <section class="panel devices">
+        <div class="row">
+          <h2>Devices on this network</h2>
+          <div class="spacer"></div>
+          <button type="button" class="btn" disabled title="Arrives in Phase 2">Scan ▾</button>
+        </div>
+        <div class="empty">Scanning arrives in Phase 2 (ARP sweep, ping, BACnet Who-Is, port check).</div>
+      </section>
+      <section class="panel history">
+        <h2>IP history</h2>
+        <ul id="history" class="hist"></ul>
+        <div class="spacer"></div>
+        <span class="small muted">Click a past IP to join with it again.</span>
+      </section>
+    </div>
+  </main>
+</div>
+
+<footer class="log" id="log" aria-live="polite"></footer>
+
+<dialog id="nodeDlg">
+  <form method="dialog" id="nodeForm">
+    <h2 id="nodeTitle">Add</h2>
+    <input type="hidden" name="id"><input type="hidden" name="kind"><input type="hidden" name="parent_id">
+    <label>Name <input name="name" required autocomplete="off"></label>
+    <div class="net-only">
+      <label>Subnet <input name="subnet" placeholder="10.20.5.0/24" class="mono" autocomplete="off"></label>
+      <div class="two">
+        <label>Allowed range from <input name="range_start" class="mono" placeholder="auto (.200)" autocomplete="off"></label>
+        <label>to <input name="range_end" class="mono" placeholder="auto (.254)" autocomplete="off"></label>
+      </div>
+    </div>
+    <fieldset>
+      <legend>Gateway / DNS override</legend>
+      <p class="small muted">Off = inherit from the level above (default: none). Leave a field blank with the box ticked to force none.</p>
+      <label class="check"><input type="checkbox" name="gw_override"> Override gateway</label>
+      <div class="two"><label>Gateway <input name="gateway" class="mono" autocomplete="off"></label>
+        <div class="suggest"><button type="button" class="btn small" id="suggestGw">Suggest .1</button></div></div>
+      <label class="check"><input type="checkbox" name="dns_override"> Override DNS</label>
+      <label>DNS servers (comma separated) <input name="dns" class="mono" autocomplete="off"></label>
+    </fieldset>
+    <label>Notes <textarea name="notes" rows="2"></textarea></label>
+    <p class="error" id="nodeErr" role="alert"></p>
+    <div class="row">
+      <button type="button" class="btn danger" id="deleteNodeBtn">Delete</button>
+      <div class="spacer"></div>
+      <button type="button" class="btn" id="cancelNode">Cancel</button>
+      <button type="submit" class="btn btn-primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="settingsDlg">
+  <form method="dialog" id="settingsForm">
+    <h2>Settings</h2>
+    <fieldset>
+      <legend>Global gateway / DNS</legend>
+      <p class="small muted">Used by every network unless a site, area or network overrides it. Default is none, so Wi-Fi keeps your internet.</p>
+      <label class="check"><input type="checkbox" name="gw_override"> Set a global gateway</label>
+      <label>Gateway <input name="gateway" class="mono" autocomplete="off"></label>
+      <label class="check"><input type="checkbox" name="dns_override"> Set global DNS servers</label>
+      <label>DNS servers <input name="dns" class="mono" autocomplete="off"></label>
+    </fieldset>
+    <fieldset>
+      <legend>Status</legend>
+      <dl class="kv" id="sysInfo"></dl>
+    </fieldset>
+    <fieldset>
+      <legend>Sites file</legend>
+      <div class="row">
+        <a class="btn" href="/api/export" download>Export sites…</a>
+        <label class="btn">Import sites… <input type="file" id="importFile" accept=".json,application/json" hidden></label>
+      </div>
+    </fieldset>
+    <p class="error" id="settingsErr" role="alert"></p>
+    <div class="row"><div class="spacer"></div>
+      <button type="button" class="btn" id="cancelSettings">Close</button>
+      <button type="submit" class="btn btn-primary">Save</button></div>
+  </form>
+</dialog>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

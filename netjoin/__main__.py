@@ -1,0 +1,102 @@
+"""Launcher: single instance, admin elevation, start the local server, open the browser."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import threading
+import urllib.request
+import webbrowser
+
+from . import APP_NAME, DEFAULT_PORT, __version__, paths
+
+
+def already_running(port: int) -> bool:
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/ping", timeout=0.7) as r:
+            return json.loads(r.read()).get("app") == APP_NAME
+    except Exception:
+        return False
+
+
+def is_admin() -> bool:
+    if sys.platform != "win32":
+        return True
+    import ctypes
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def relaunch_as_admin() -> bool:
+    """Ask Windows (UAC) to start us again elevated. True if the request went through."""
+    import ctypes
+    import subprocess
+    if getattr(sys, "frozen", False):
+        exe, params = sys.executable, subprocess.list2cmdline(sys.argv[1:])
+    else:
+        exe, params = sys.executable, subprocess.list2cmdline(["-m", "netjoin", *sys.argv[1:]])
+    # Elevated processes start in System32, so give the working folder explicitly.
+    rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, params, str(paths.app_dir()), 1)
+    return rc > 32
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(prog="netjoin", description=f"{APP_NAME} {__version__}")
+    ap.add_argument("--port", type=int, default=DEFAULT_PORT)
+    ap.add_argument("--fake", action="store_true", help="use the in-memory demo back-end (changes nothing)")
+    ap.add_argument("--no-browser", action="store_true")
+    ap.add_argument("--no-elevate", action="store_true", help="don't ask for admin (Join/DHCP will be disabled)")
+    args = ap.parse_args()
+    url = f"http://127.0.0.1:{args.port}/"
+
+    if already_running(args.port):
+        print(f"{APP_NAME} is already running – opening {url}")
+        if not args.no_browser:
+            webbrowser.open(url)
+        return
+
+    if not args.fake and not args.no_elevate and not is_admin():
+        if relaunch_as_admin():
+            return
+        print("Admin rights were refused – starting anyway; Join and DHCP will be unavailable.")
+
+    from .engine import Engine
+    from .eventlog import EventLog
+    from .netcfg import get_backend
+    from .server import build_app
+    from .store import Store
+    import uvicorn
+
+    data = paths.data_dir()
+    store = Store(data / ("netjoin-demo.db" if args.fake else "netjoin.db"))
+    store.backup(data / "backups")
+    log = EventLog(data / "netjoin.log")
+    backend = get_backend(fake=args.fake)
+    engine = Engine(store, backend, log)
+    log.add(f"{APP_NAME} {__version__} started ({backend.kind} back-end, data in {data})")
+
+    app = build_app(engine, args.port)
+    if not args.no_browser:
+        threading.Timer(1.2, webbrowser.open, [url]).start()
+    print(f"{APP_NAME} {__version__} running at {url}  (close this window to stop)")
+    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning", log_config=None)
+
+
+def run() -> None:
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        if sys.platform == "win32":
+            input("\nNetJoin hit an error (details above). Press Enter to close...")
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    run()
