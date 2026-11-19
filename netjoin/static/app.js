@@ -96,6 +96,13 @@ async function refreshStatus() {
     cur.append(el("button", { type: "button", class: "btn small", onclick: (e) => withBusy(e.currentTarget, async () => {
       const r = await api("/internet", { method: "POST" }); if (r.internet === 2) flash(r.detail, "warn"); await refreshStatus(); }) }, "Check internet"));
   }
+  // Revert to DHCP only makes sense when the adapter isn't already on DHCP.
+  const dh = $("#dhcpBtn");
+  if (!dh.classList.contains("busy")) {
+    const already = !!(s.adapter && s.adapter.dhcp === true);
+    dh.disabled = !s.adapter || already;
+    dh.title = !s.adapter ? "Pick an adapter first" : already ? `${s.adapter.name} is already on DHCP` : `Set ${s.adapter.name} back to DHCP`;
+  }
   const rj = $("#rejoinBtn");
   if (s.last_network && !s.joined) { rj.hidden = false; rj.textContent = `Rejoin ${s.last_network.network}`; }
   else rj.hidden = true;
@@ -650,9 +657,11 @@ $("#adapter").addEventListener("change", async (e) => {
 $("#showAll").addEventListener("change", refreshAdapters);
 $("#search").addEventListener("input", renderTree);
 $("#addSiteBtn").addEventListener("click", () => openNode({ kind: "site" }));
-$("#dhcpBtn").addEventListener("click", (e) => withBusy(e.currentTarget, async () => {
-  await api("/dhcp", { method: "POST" }); flash("Adapter set back to DHCP");
-  await refreshStatus(); }));
+$("#dhcpBtn").addEventListener("click", async (e) => {
+  await withBusy(e.currentTarget, async () => { await api("/dhcp", { method: "POST" }); flash("Adapter set back to DHCP"); });
+  await refreshStatus();   // after withBusy re-enables the button, so the DHCP state decides
+  if (state.detail) refreshDetail();
+});
 $("#rejoinBtn").addEventListener("click", (e) => withBusy(e.currentTarget, async () => {
   const r = await api("/rejoin", { method: "POST" }); flash(`Rejoined as ${r.ip}/${r.prefix}`);
   await refreshStatus(); await refreshTree(); await refreshDetail(); }));

@@ -99,7 +99,7 @@ Technical notes:
 
 ## Global DHCP button
 
-- A **DHCP** button that's always visible at the top of every page, so you can drop the selected adapter back to DHCP from anywhere.
+- A **DHCP** button that's always visible at the top of every page, so you can drop the selected adapter back to DHCP from anywhere. Greyed out (with a tooltip) while the selected adapter is already on DHCP.
 
 ## History and status indicators
 
