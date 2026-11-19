@@ -4,7 +4,7 @@ _Last updated: 2026-11-19_
 
 App name: **NetJoin**. Target: Windows 10+, engineers have local admin.
 
-**Build phases:** 1 – tree, Join + clash check, DHCP / rejoin, history, internet check, gateway / DNS overrides, SQLite *(built, v0.1.0 – tested on Windows 2026-11-19: Join, clash detection via DAD, gateway override, Revert to DHCP all working)* · 2 – scans (ARP, ping, BACnet Who-Is, port check, Npcap detection) · 3 – Discover wizard, exe packaging polish · 4 – responsive layout for narrow windows (split-screen tabs, small browser windows), after all features are done.
+**Build phases:** 1 – tree, Join + clash check, DHCP / rejoin, history, internet check, gateway / DNS overrides, SQLite *(built, v0.1.0 – tested on Windows 2026-11-19: Join, clash detection via DAD, gateway override, Revert to DHCP all working)* · 2 – scans (ARP, ping, BACnet Who-Is, port check, Npcap detection) *(built, v0.2.0 – needs testing on Windows)* · 3 – Discover wizard, exe packaging polish · 4 – responsive layout for narrow windows (split-screen tabs, small browser windows), after all features are done.
 
 ## Concept
 
@@ -127,6 +127,18 @@ Goal: locate hosts and controllers on the current subnet, and find BMS networks 
   - **BAC0**: high-level, async, built on bacpypes3. Has discovery built in. Actively maintained.
   - **bacpypes3**: the lower-level stack underneath, with a `discover-devices` sample.
 - Use the vendor ID in the I-Am to tag results as Siemens, Trend, etc.
+
+### Phase 2 – as built (v0.2.0)
+
+- **Scans run from the laptop's current subnet.** The Scan menu is disabled until the selected adapter is on the network's subnet (Join first). Devices are stored per subnet, so the list stays even if the network is renamed.
+- **Scan menu:** Quick (ARP + BACnet, also the header *Scan* button) · ARP sweep · Ping sweep · BACnet Who-Is · BMS port check · Passive listen 30 s (Npcap) · Full (ARP + ping + BACnet + ports).
+- **ARP sweep:** with Npcap, one raw ARP broadcast for the whole subnet (scapy, ~2 s); without Npcap, Windows `SendARP` per address, 64 at a time.
+- **Ping sweep:** Windows `IcmpSendEcho2Ex` from the adapter's own IP (no PowerShell, no `ping.exe`), 64 at a time, shows response time.
+- **Sweeps are limited to 1,024 addresses** (a /22). BACnet Who-Is still works on bigger subnets.
+- **BACnet Who-Is:** our own small implementation (no BAC0 needed). Global Who-Is (DNET 0xFFFF, so routers pass it to MS/TP networks) sent to the subnet broadcast and 255.255.255.255 from UDP 47808 on the adapter's IP. Listens 3 s, then reads each device's **object-name, model-name and vendor-name** with ReadProperty. Devices behind routers (e.g. DXR2.M on MS/TP behind a PXC) are listed with their router IP and "net N, MAC M". If UDP 47808 is already used by another BACnet tool, NetJoin uses a random port and warns that broadcast replies may be missed.
+- **BMS port check** on known hosts: 80 HTTP, 443 HTTPS, 8080, 502 Modbus TCP, 1911/4911 Niagara Fox, 22 SSH, 23 Telnet. Web ports become clickable links. *(Trend-specific ports to add once confirmed.)*
+- **Passive listen (Npcap only):** 30 s sniff of ARP and UDP 47808–47823, sending nothing. Hosts seen on *other* subnets are logged; Phase 3 Discover will use them.
+- **Npcap detection:** `System32\Npcap\wpcap.dll`. Status and reason shown in Settings; Npcap-only options are greyed out with "Needs Npcap".
 
 ### Ideas / feasibility notes
 

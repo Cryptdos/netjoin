@@ -2,3 +2,5 @@
 starlette>=0.37
 uvicorn>=0.30
 psutil>=5.9
+# Optional at runtime: only used when Npcap is installed (raw ARP sweep, passive listen)
+scapy>=2.5

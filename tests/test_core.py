@@ -122,6 +122,26 @@ class StoreAndJoin(unittest.TestCase):
         with self.assertRaises(JoinError):
             self.engine.join(self.net["id"], ip="10.20.6.5")
 
+    def test_scan_manager_full_on_fake(self):
+        import time
+        from netjoin.scan import ScanError, ScanManager
+        from netjoin.scan.probes import FakeProber
+        scans = ScanManager(self.engine, FakeProber())
+        with self.assertRaises(ScanError):            # not joined yet
+            scans.start("quick", self.net["id"])
+        self.engine.join(self.net["id"])
+        scans.start("full", self.net["id"])
+        for _ in range(100):
+            if not scans.status()["running"]:
+                break
+            time.sleep(0.05)
+        devs = self.store.devices("10.20.5.0/24")
+        self.assertEqual(scans.status()["phase"], "done")
+        self.assertEqual(sum(1 for d in devs if d["bacnet_instance"]), 4)
+        self.assertIn("This laptop", [d["name"] for d in devs])
+        with self.assertRaises(ScanError):
+            scans.start("passive", self.net["id"])     # needs Npcap
+
     def test_export_import_roundtrip(self):
         payload = self.store.export()
         self.assertEqual(self.store.import_(payload), 3)

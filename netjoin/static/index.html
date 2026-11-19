@@ -45,10 +45,28 @@
       <section class="panel devices">
         <div class="row">
           <h2>Devices on this network</h2>
+          <span class="small muted" id="lastScan"></span>
           <div class="spacer"></div>
-          <button type="button" class="btn" disabled title="Arrives in Phase 2">Scan ▾</button>
+          <div class="chips" role="group" aria-label="Filter devices">
+            <button type="button" class="chip on" data-filter="all" aria-pressed="true">All</button>
+            <button type="button" class="chip" data-filter="bacnet" aria-pressed="false">BACnet</button>
+            <button type="button" class="chip" data-filter="other" aria-pressed="false">Other</button>
+          </div>
+          <details class="menu" id="scanMenu">
+            <summary class="btn" id="scanMenuBtn">Scan ▾</summary>
+            <div class="menu-list" id="scanOptions" role="menu"></div>
+          </details>
         </div>
-        <div class="empty">Scanning arrives in Phase 2 (ARP sweep, ping, BACnet Who-Is, port check).</div>
+        <div class="progress" id="scanProgress" hidden>
+          <div class="row"><span id="scanPhase" class="small"></span><div class="spacer"></div>
+            <button type="button" class="btn small" id="scanCancel">Cancel</button></div>
+          <div class="bar"><div id="scanBar"></div></div>
+        </div>
+        <div class="table-wrap" id="devicesBox">
+          <div class="empty">Select a network.</div>
+        </div>
+        <div class="row small muted"><span id="devCount"></span><div class="spacer"></div>
+          <button type="button" class="btn small" id="clearDevices" hidden>Clear list</button></div>
       </section>
       <section class="panel history">
         <h2>IP history</h2>

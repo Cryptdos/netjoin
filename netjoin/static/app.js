@@ -2,7 +2,8 @@
 // NetJoin front end: plain JS, no build step.
 
 const $ = (s) => document.querySelector(s);
-const state = { tree: [], selected: null, detail: null, status: null, expanded: new Set(), logAfter: 0, busy: false };
+const state = { tree: [], selected: null, detail: null, status: null, expanded: new Set(), logAfter: 0, busy: false,
+  scan: { running: false, options: [] }, devices: [], filter: "all", scanTimer: null };
 
 try { JSON.parse(localStorage.getItem("nj.expanded") || "[]").forEach((id) => state.expanded.add(id)); } catch (e) {}
 try { state.selected = JSON.parse(localStorage.getItem("nj.selected") || "null"); } catch (e) {}
@@ -164,7 +165,10 @@ async function refreshDetail() {
       el("div", { class: "row", style: "flex-direction:column;align-items:flex-start;gap:4px" }, crumbs, el("h1", {}, d.name)),
       el("div", { style: "margin-top:22px" }, inetPill),
       el("div", { class: "spacer" }),
-      el("div", { class: "row" }, editBtn, el("button", { type: "button", class: "btn", disabled: true, title: "Arrives in Phase 2" }, "Scan"), joinBtn)),
+      el("div", { class: "row" }, editBtn,
+        el("button", { type: "button", class: "btn", disabled: !d.on_subnet || state.scan.running,
+          title: d.on_subnet ? "Quick scan: ARP sweep + BACnet Who-Is" : "Join this network first, then scan",
+          onclick: () => startScan("quick") }, "Scan"), joinBtn)),
     el("div", { class: "tiles" },
       tile("Subnet", d.subnet),
       tile("Allowed laptop range", `.${d.range_start.split(".").pop()} – .${d.range_end.split(".").pop()}`, `${d.range_start} – ${d.range_end}`),
@@ -176,6 +180,7 @@ async function refreshDetail() {
 }
 
 function renderHistory() {
+  renderScanMenu(); refreshDevices();
   const ul = $("#history");
   const d = state.detail;
   if (!d || d.kind !== "network") { ul.replaceChildren(el("li", { class: "empty" }, "Select a network.")); return; }
@@ -202,6 +207,114 @@ async function doJoin(btn, ip) {
   });
   await Promise.all([refreshStatus(), refreshTree()]); await refreshDetail();
 }
+
+// ---------- scanning ----------
+function renderScanMenu() {
+  const d = state.detail; const box = $("#scanOptions"); const menu = $("#scanMenu");
+  const usable = d && d.kind === "network" && d.on_subnet && !state.scan.running;
+  menu.setAttribute("aria-disabled", usable ? "false" : "true");
+  const kids = [];
+  if (d && d.kind === "network" && !d.on_subnet) kids.push(el("div", { class: "note" }, "Join this network first – scans run from the laptop's current subnet."));
+  if (state.scan.running) kids.push(el("div", { class: "note" }, "A scan is already running."));
+  const desc = { quick: "Finds hosts and BACnet controllers. Recommended.", arp: "Every address on the subnet; devices answer even if they block ping.",
+    ping: "ICMP echo to every address; shows response time.", bacnet: "Broadcast Who-Is, then reads each device's name and model.",
+    ports: "Checks web UI, Modbus, Niagara, SSH/Telnet on known hosts.", passive: "Sends nothing; listens to ARP and BACnet traffic.",
+    full: "ARP + ping + BACnet + ports. Slowest." };
+  for (const o of state.scan.options) {
+    kids.push(el("button", { type: "button", role: "menuitem", disabled: !usable || !o.available,
+      onclick: () => { menu.open = false; startScan(o.kind); } },
+      el("span", {}, o.label), el("span", { class: "d" }, o.available ? desc[o.kind] : `${o.note} – see Settings`)));
+  }
+  box.replaceChildren(...kids);
+}
+document.addEventListener("click", (e) => { const m = $("#scanMenu"); if (m.open && !m.contains(e.target)) m.open = false; });
+
+async function startScan(kind) {
+  const d = state.detail; if (!d) return;
+  try { state.scan = { ...state.scan, ...(await api("/scan", { method: "POST", body: { kind, network_id: d.id } })) }; }
+  catch (e) { flash(e.message, "error"); return; }
+  pollScan();
+}
+
+async function pollScan() {
+  clearTimeout(state.scanTimer);
+  let st;
+  try { st = await api("/scan"); } catch (e) { return; }
+  const wasRunning = state.scan.running;
+  state.scan = st;
+  const box = $("#scanProgress");
+  if (st.running) {
+    box.hidden = false;
+    $("#scanPhase").textContent = `${st.label}: ${st.phase}${st.total > 1 ? ` – ${st.done}/${st.total}` : ""}${st.found ? ` · ${st.found} found` : ""}`;
+    $("#scanBar").style.width = st.total ? `${Math.round((st.done / st.total) * 100)}%` : "8%";
+    if (!pollScan.n || ++pollScan.n % 3 === 0) refreshDevices();
+    pollScan.n = pollScan.n || 1;
+    state.scanTimer = setTimeout(pollScan, 700);
+  } else {
+    box.hidden = true; pollScan.n = 0;
+    if (wasRunning) { refreshDevices(); if (st.error) flash(st.error, "error"); }
+  }
+  renderScanMenu(); refreshLog();
+  if (wasRunning !== st.running) refreshDetailButtonsOnly();
+}
+function refreshDetailButtonsOnly() { if (state.detail && state.detail.kind === "network") refreshDetail(); }
+$("#scanCancel").addEventListener("click", () => api("/scan/cancel", { method: "POST" }).catch(() => {}));
+
+async function refreshDevices() {
+  const d = state.detail; const box = $("#devicesBox");
+  if (!d || d.kind !== "network") { box.replaceChildren(el("div", { class: "empty" }, "Select a network.")); $("#devCount").textContent = ""; $("#clearDevices").hidden = true; $("#lastScan").textContent = ""; return; }
+  let r; try { r = await api(`/devices?subnet=${encodeURIComponent(d.subnet)}`); } catch (e) { return; }
+  if (!state.detail || state.detail.subnet !== r.subnet) return;
+  state.devices = r.devices;
+  $("#lastScan").textContent = r.last_scan ? `Last: ${r.last_scan.kind}, ${when(r.last_scan.ts)}` : "";
+  renderDevices();
+}
+
+function renderDevices() {
+  const d = state.detail; const box = $("#devicesBox");
+  const all = state.devices;
+  const rows = all.filter((x) => state.filter === "all" || (state.filter === "bacnet" ? x.bacnet_instance != null : x.bacnet_instance == null));
+  $("#clearDevices").hidden = all.length === 0;
+  const others = all.filter((x) => x.sources !== "self").length;
+  $("#devCount").textContent = all.length ? `${others} device(s)${rows.length !== all.length ? `, ${rows.length} shown` : ""}` : "";
+  if (!all.length) {
+    box.replaceChildren(el("div", { class: "empty" }, d.on_subnet ? "No scan results yet – use Scan to find hosts and controllers." : "No scan results yet. Join this network, then Scan."));
+    return;
+  }
+  const portLabel = { 80: "HTTP", 443: "HTTPS", 8080: "HTTP-alt", 502: "Modbus", 1911: "Fox", 4911: "Fox TLS", 22: "SSH", 23: "Telnet" };
+  const webUrl = (ip, p) => p === 443 ? `https://${ip}/` : p === 8080 ? `http://${ip}:8080/` : `http://${ip}/`;
+  const tr = (x) => {
+    const self = x.sources === "self" || (x.sources || "").split(",").includes("self");
+    const ports = (x.ports || "").split(",").filter(Boolean).map(Number);
+    return el("tr", { class: self ? "self" : null },
+      el("td", { class: "mono" }, x.ip),
+      el("td", { class: "mono" }, x.mac || "—"),
+      el("td", {}, self ? el("strong", {}, "This laptop") : (x.vendor || (x.bacnet_vendor_id != null ? `Vendor ID ${x.bacnet_vendor_id}` : "—"))),
+      el("td", {}, x.bacnet_instance != null ? [
+        el("span", { class: "mono" }, `#${x.bacnet_instance}`), x.name ? ` · ${x.name}` : "",
+        x.model ? el("span", { class: "sub2" }, x.model) : null,
+        x.route ? el("span", { class: "sub2" }, `behind ${x.ip} (${x.route})`) : null] : "—"),
+      el("td", {}, ports.length ? ports.map((p) => [80, 443, 8080].includes(p)
+        ? el("a", { class: "port", href: webUrl(x.ip, p), target: "_blank", rel: "noopener noreferrer" }, portLabel[p] || p)
+        : el("span", { class: "port" }, portLabel[p] || p)) : "—"),
+      el("td", { class: "small" }, (x.sources || "").split(",").filter((s) => s && s !== "self").join(" · ") || "—",
+        x.ping_ms != null ? el("span", { class: "sub2" }, `${x.ping_ms} ms`) : null,
+        el("span", { class: "sub2" }, when(x.last_seen))));
+  };
+  box.replaceChildren(el("table", { class: "dev" },
+    el("thead", {}, el("tr", {}, ["IP", "MAC", "Vendor", "BACnet device", "Open ports", "Seen by"].map((h) => el("th", {}, h)))),
+    el("tbody", {}, rows.map(tr))));
+}
+
+for (const c of document.querySelectorAll(".chip")) c.addEventListener("click", () => {
+  state.filter = c.dataset.filter;
+  for (const o of document.querySelectorAll(".chip")) { o.classList.toggle("on", o === c); o.setAttribute("aria-pressed", String(o === c)); }
+  renderDevices();
+});
+$("#clearDevices").addEventListener("click", async () => {
+  const d = state.detail; if (!d || !confirm(`Clear the device list for ${d.subnet}?`)) return;
+  await api(`/devices?subnet=${encodeURIComponent(d.subnet)}`, { method: "DELETE" }); refreshDevices(); refreshLog();
+});
 
 // ---------- node dialog ----------
 function openNode({ node, parent, kind }) {
@@ -281,7 +394,7 @@ $("#settingsBtn").addEventListener("click", async () => {
   const s = state.status || {};
   const rows = [["Back-end", s.backend === "fake" ? "Demo (fake) – no real changes" : "Windows (netsh)"],
     ["Administrator", s.admin ? "Yes" : "No – Join/DHCP unavailable"],
-    ["Npcap", (s.npcap && s.npcap.installed) ? "Installed" : "Not detected – passive listening and raw ARP sweep will be greyed out (Phase 2)"],
+    ["Npcap", s.npcap ? s.npcap.note : "—"],
     ["Data folder", (s.data_dir || "") + (s.portable ? " (portable mode)" : "")]];
   $("#sysInfo").replaceChildren(...rows.flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, v)]));
   $("#settingsDlg").showModal();
@@ -330,7 +443,9 @@ $("#rejoinBtn").addEventListener("click", (e) => withBusy(e.currentTarget, async
   await refreshStatus(); await refreshTree(); await refreshDetail(); }));
 
 (async function init() {
-  await refreshStatus(); await refreshAdapters(); await refreshTree(); await refreshDetail(); await refreshLog();
+  await refreshStatus(); await refreshAdapters(); await refreshTree();
+  try { state.scan = await api("/scan"); } catch (e) {}
+  await refreshDetail(); await refreshLog(); if (state.scan.running) pollScan();
   setInterval(refreshStatus, 5000); setInterval(refreshLog, 3000);
   setInterval(() => { if (document.visibilityState === "visible" && !state.busy && document.activeElement !== $("#adapter")) refreshAdapters(); }, 15000);
 })();

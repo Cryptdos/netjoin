@@ -15,9 +15,12 @@ from starlette.staticfiles import StaticFiles
 
 from . import APP_NAME, __version__, paths
 from .engine import Engine, JoinError
+from .scan import ScanError, ScanManager
+from .scan import npcap as npcap_mod
 from .store import StoreError
 
 ENGINE: Engine | None = None
+SCANS: ScanManager | None = None
 PORT = 8765
 
 
@@ -59,7 +62,7 @@ def api(fn):
         data = await body(request) if request.method in ("POST", "PUT") else {}
         try:
             result = await run_in_threadpool(fn, request, data)
-        except (StoreError, JoinError) as e:
+        except (StoreError, JoinError, ScanError) as e:
             return JSONResponse({"error": str(e)}, status_code=400)
         if isinstance(result, Response):
             return result
@@ -76,7 +79,8 @@ def status(req, data):
     s = eng().status()
     s["data_dir"] = str(paths.data_dir())
     s["portable"] = paths.is_portable()
-    s["npcap"] = {"installed": False, "note": "Npcap features arrive in Phase 2"}
+    s["npcap"] = npcap_mod.status() if eng().backend.kind == "windows" else \
+        {"installed": False, "scapy": False, "available": False, "note": "Demo mode – Npcap not used"}
     return s
 
 
@@ -118,6 +122,14 @@ def node_detail(req, data):
         out["last_worked"] = s.last_worked_ip(nid)
         out["last_internet"] = s.last_internet(nid)
         out["history"] = s.ip_history(nid)
+        st = eng().status()
+        prim = st.get("primary")
+        try:
+            import ipaddress
+            out["on_subnet"] = bool(prim) and ipaddress.IPv4Address(prim["ip"]) in ipaddress.IPv4Network(n["subnet"])
+        except ValueError:
+            out["on_subnet"] = False
+        out["last_scan"] = s.get_setting(f"lastscan:{n['subnet']}")
     return out
 
 
@@ -150,6 +162,33 @@ def rejoin(req, data):
 
 def internet(req, data):
     return eng().internet_check()
+
+
+def scan_status(req, data):
+    return {**SCANS.status(), "options": SCANS.options()}
+
+
+def scan_start(req, data):
+    nid = data.get("network_id")
+    return SCANS.start(data.get("kind", "quick"), int(nid) if nid is not None else None)
+
+
+def scan_cancel(req, data):
+    SCANS.cancel()
+    return {"ok": True}
+
+
+def devices(req, data):
+    subnet = req.query_params.get("subnet", "")
+    rows = eng().store.devices(subnet)
+    return {"subnet": subnet, "devices": rows, "last_scan": eng().store.get_setting(f"lastscan:{subnet}")}
+
+
+def clear_devices(req, data):
+    subnet = req.query_params.get("subnet", "")
+    n = eng().store.clear_devices(subnet)
+    eng().log.add(f"Cleared {n} device(s) for {subnet}")
+    return {"cleared": n}
 
 
 def log(req, data):
@@ -190,9 +229,9 @@ async def index(request):
     return FileResponse(paths.static_dir() / "index.html")
 
 
-def build_app(engine: Engine, port: int) -> Starlette:
-    global ENGINE, PORT
-    ENGINE, PORT = engine, port
+def build_app(engine: Engine, port: int, scans: ScanManager) -> Starlette:
+    global ENGINE, PORT, SCANS
+    ENGINE, PORT, SCANS = engine, port, scans
     routes = [
         Route("/", index),
         Route("/api/ping", api(ping)),
@@ -208,6 +247,11 @@ def build_app(engine: Engine, port: int) -> Starlette:
         Route("/api/dhcp", api(dhcp), methods=["POST"]),
         Route("/api/rejoin", api(rejoin), methods=["POST"]),
         Route("/api/internet", api(internet), methods=["POST"]),
+        Route("/api/scan", api(scan_status)),
+        Route("/api/scan", api(scan_start), methods=["POST"]),
+        Route("/api/scan/cancel", api(scan_cancel), methods=["POST"]),
+        Route("/api/devices", api(devices)),
+        Route("/api/devices", api(clear_devices), methods=["DELETE"]),
         Route("/api/log", api(log)),
         Route("/api/settings/global", api(get_global)),
         Route("/api/settings/global", api(put_global), methods=["PUT"]),

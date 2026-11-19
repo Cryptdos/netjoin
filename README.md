@@ -11,7 +11,9 @@ Design notes: [docs/network-join-tool.md](docs/network-join-tool.md)
 
 **Phase 1 (this version):** site / area / network tree, Join with clash check and retry, Revert to DHCP, Rejoin last network, IP history (worked / clashed), internet check per adapter, gateway / DNS overrides (none by default), SQLite storage with automatic backups, import / export.
 
-Next: Phase 2 scans (ARP, ping, BACnet Who-Is, port check, Npcap features). Phase 3 Discover wizard and polish.
+**Phase 2 (v0.2.0):** Scan menu – ARP sweep, ping sweep, BACnet Who-Is (reads device name, model and vendor; finds devices behind MS/TP routers), BMS port check with clickable web UI links, passive listen (Npcap), and a device list per network with BACnet / Other filters.
+
+Next: Phase 3 Discover wizard and exe polish. Phase 4 layout for narrow windows.
 
 ## Quick start (from source)
 
@@ -35,6 +37,10 @@ Running it a second time while it's already running just opens the browser again
 build.bat
 ```
 Produces `dist\NetJoin\NetJoin.exe` (plus its support files). Zip the `dist\NetJoin` folder to share it; there's no installer. The exe asks for admin when it starts.
+
+## Npcap (optional)
+
+Install [Npcap](https://npcap.com) to unlock passive listening and a faster raw ARP sweep. Without it those options are greyed out and everything else works. Settings shows whether it's detected.
 
 ## Where data lives
 

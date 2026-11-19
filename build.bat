@@ -12,7 +12,7 @@ python -m pip install -r requirements-dev.txt || goto :err
 python -m unittest discover tests || goto :err
 pyinstaller --noconfirm --clean --name NetJoin --console --uac-admin ^
   --add-data "netjoin\static;netjoin\static" ^
-  --collect-submodules uvicorn launcher.py || goto :err
+  --collect-submodules uvicorn --collect-submodules scapy launcher.py || goto :err
 echo.
 echo Built: dist\NetJoin\NetJoin.exe
 exit /b 0

@@ -66,6 +66,7 @@ def main() -> None:
     from .engine import Engine
     from .eventlog import EventLog
     from .netcfg import get_backend
+    from .scan import ScanManager, get_prober
     from .server import build_app
     from .store import Store
     import uvicorn
@@ -78,7 +79,8 @@ def main() -> None:
     engine = Engine(store, backend, log)
     log.add(f"{APP_NAME} {__version__} started ({backend.kind} back-end, data in {data})")
 
-    app = build_app(engine, args.port)
+    scans = ScanManager(engine, get_prober(backend.kind))
+    app = build_app(engine, args.port, scans)
     if not args.no_browser:
         threading.Timer(1.2, webbrowser.open, [url]).start()
     print(f"{APP_NAME} {__version__} running at {url}  (close this window to stop)")

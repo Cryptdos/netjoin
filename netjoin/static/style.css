@@ -113,3 +113,28 @@ dialog p{margin:0}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:0;font-size:13px}
 .kv dt{color:var(--muted)}
 .kv dd{margin:0;overflow-wrap:anywhere}
+
+.chips{display:flex;gap:6px}
+.chip{height:30px;padding:0 12px;border:1px solid #C4C9D0;border-radius:999px;background:#fff;font:inherit;font-size:13px;cursor:pointer}
+.chip.on{background:var(--text);border-color:var(--text);color:#fff}
+.menu{position:relative}
+.menu summary{list-style:none}
+.menu summary::-webkit-details-marker{display:none}
+.menu[aria-disabled="true"] summary{opacity:.5;cursor:not-allowed}
+.menu-list{position:absolute;right:0;top:calc(100% + 4px);z-index:20;min-width:300px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 28px rgba(0,0,0,.14);padding:6px;display:flex;flex-direction:column}
+.menu-list button{display:flex;flex-direction:column;align-items:flex-start;gap:2px;border:0;background:none;font:inherit;text-align:left;padding:8px 10px;border-radius:6px;cursor:pointer}
+.menu-list button:hover:not(:disabled){background:var(--bg)}
+.menu-list button:disabled{opacity:.55;cursor:not-allowed}
+.menu-list .d{font-size:12px;color:var(--muted)}
+.menu-list .note{padding:8px 10px;font-size:12px;color:var(--warn);background:var(--warn-bg);border-radius:6px;margin-bottom:4px}
+.progress{display:flex;flex-direction:column;gap:6px}
+.bar{height:6px;background:var(--bg);border-radius:3px;overflow:hidden}
+.bar>div{height:100%;width:0;background:var(--accent);transition:width .3s}
+.table-wrap{overflow-x:auto}
+table.dev{width:100%;border-collapse:collapse;font-size:13px}
+table.dev th{text-align:left;color:var(--muted);font-size:12px;font-weight:600;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+table.dev td{padding:8px 10px;border-bottom:1px solid #EEF0F2;vertical-align:top}
+table.dev td.mono{font-family:var(--mono);white-space:nowrap}
+table.dev tr.self{background:var(--accent-bg)}
+table.dev .sub2{display:block;font-size:11px;color:var(--muted)}
+.port{display:inline-block;margin:0 4px 2px 0;padding:1px 6px;border:1px solid var(--line);border-radius:4px;font-size:11px;white-space:nowrap}

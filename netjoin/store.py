@@ -43,6 +43,26 @@ CREATE TABLE IF NOT EXISTS history(
 );
 CREATE INDEX IF NOT EXISTS history_net ON history(network_id, ts);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS devices(
+    id INTEGER PRIMARY KEY,
+    subnet TEXT NOT NULL,          -- e.g. 10.20.5.0/24 (devices belong to a subnet, not a tree node)
+    key TEXT NOT NULL,             -- ip, or ip|net:mac for BACnet devices routed behind that ip
+    ip TEXT NOT NULL,
+    mac TEXT,
+    ping_ms REAL,
+    bacnet_instance INTEGER,
+    bacnet_vendor_id INTEGER,
+    vendor TEXT,
+    name TEXT,
+    model TEXT,
+    route TEXT,
+    ports TEXT,                    -- comma-separated open TCP ports
+    sources TEXT,                  -- comma-separated: arp, ping, bacnet, ports, passive
+    first_seen TEXT,
+    last_seen TEXT,
+    UNIQUE(subnet, key)
+);
+CREATE INDEX IF NOT EXISTS devices_subnet ON devices(subnet);
 """
 
 ALLOWED_PARENTS = {"site": {None}, "area": {"site", "area"}, "network": {"site", "area"}}
@@ -282,6 +302,49 @@ class Store:
         row = self.db.execute("SELECT internet FROM history WHERE network_id=? AND result='worked' "
                               "ORDER BY id DESC LIMIT 1", (network_id,)).fetchone()
         return row["internet"] if row else None
+
+    # ---------- devices ----------
+    def upsert_device(self, subnet: str, key: str, ip: str, source: str, **fields) -> None:
+        """Merge what one scan learned about a device into what we already know."""
+        with self._lock:
+            row = self.db.execute("SELECT * FROM devices WHERE subnet=? AND key=?", (subnet, key)).fetchone()
+            ts = now()
+            ports = fields.pop("ports", None)
+            if row is None:
+                cols = {"subnet": subnet, "key": key, "ip": ip, "sources": source, "first_seen": ts, "last_seen": ts,
+                        "ports": ",".join(str(p) for p in sorted(ports)) if ports else None}
+                cols.update({k: v for k, v in fields.items() if v is not None})
+                self.db.execute(f"INSERT INTO devices({','.join(cols)}) VALUES({','.join('?' * len(cols))})",
+                                tuple(cols.values()))
+            else:
+                srcs = set(filter(None, (row["sources"] or "").split(","))) | {source}
+                upd = {"last_seen": ts, "sources": ",".join(sorted(srcs))}
+                upd.update({k: v for k, v in fields.items() if v is not None})
+                if ports is not None:   # a port check replaces the old list for this device
+                    upd["ports"] = ",".join(str(p) for p in sorted(ports)) or None
+                sets = ",".join(f"{k}=?" for k in upd)
+                self.db.execute(f"UPDATE devices SET {sets} WHERE id=?", (*upd.values(), row["id"]))
+            self.db.commit()
+
+    def devices(self, subnet: str) -> list[dict]:
+        rows = [dict(r) for r in self.db.execute("SELECT * FROM devices WHERE subnet=?", (subnet,))]
+
+        def sort_key(r):
+            try:
+                return (tuple(int(x) for x in r["ip"].split(".")), r["key"])
+            except ValueError:
+                return ((999,), r["key"])
+        return sorted(rows, key=sort_key)
+
+    def device_ips(self, subnet: str) -> list[str]:
+        return sorted({r["ip"] for r in self.db.execute("SELECT ip FROM devices WHERE subnet=?", (subnet,))},
+                      key=lambda ip: tuple(int(x) for x in ip.split(".")))
+
+    def clear_devices(self, subnet: str) -> int:
+        with self._lock:
+            n = self.db.execute("DELETE FROM devices WHERE subnet=?", (subnet,)).rowcount
+            self.db.commit()
+        return n
 
     # ---------- import / export ----------
     def export(self) -> dict:
