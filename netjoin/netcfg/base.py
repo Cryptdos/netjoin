@@ -67,6 +67,14 @@ class Backend:
     def set_dhcp(self, name: str) -> None:
         raise NotImplementedError
 
+    def set_gateway(self, name: str, ip: str, prefix: int, gateway: str | None) -> None:
+        """Change only the default gateway; the address stays, so connections on the subnet carry on."""
+        raise NotImplementedError
+
+    def set_dns(self, name: str, dns: list[str]) -> None:
+        """Change only the DNS servers; nothing else on the adapter is touched."""
+        raise NotImplementedError
+
     def dad_state(self, name: str, ip: str) -> str | None:
         raise NotImplementedError
 

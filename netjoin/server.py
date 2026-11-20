@@ -132,13 +132,24 @@ def node_detail(req, data):
         except ValueError:
             out["on_subnet"] = False
         out["last_scan"] = s.get_setting(f"lastscan:{n['subnet']}")
+        # Saved settings that aren't on the adapter yet (the engineer chose "Later")
+        applied = s.get_setting("applied") or {}
+        if applied.get("network_id") == nid:
+            dr = eng().config_drift()
+            if dr and (dr["rejoin"] or dr["gateway"] or dr["dns"]):
+                out["pending"] = {"rejoin": dr["rejoin"], "gateway": dr["gateway"], "dns": dr["dns"]}
     return out
 
 
 def update_node(req, data):
     n = eng().store.update_node(int(req.path_params["id"]), data)
     eng().log.add(f"Updated {n['kind']} '{n['name']}'")
-    return n
+    # If the laptop is on a network this edit affects, apply what's safe now and say what needs asking.
+    return {**n, "live": eng().apply_config_changes()}
+
+
+def apply_changes(req, data):
+    return eng().apply_config_changes(confirm_gateway=bool(data.get("gateway")))
 
 
 def delete_node(req, data):
@@ -253,7 +264,7 @@ def put_global(req, data):
             raise StoreError(f"DNS server isn't a valid IPv4 address: {d}")
     eng().store.set_setting("global", g)
     eng().log.add("Global gateway / DNS settings saved")
-    return g
+    return {**g, "live": eng().apply_config_changes()}
 
 
 THEMES = ("system", "light", "dark")
@@ -324,6 +335,7 @@ def build_app(engine: Engine, port: int, scans: ScanManager) -> Starlette:
         Route("/api/dhcp", api(dhcp), methods=["POST"]),
         Route("/api/rejoin", api(rejoin), methods=["POST"]),
         Route("/api/history", api(history)),
+        Route("/api/apply-changes", api(apply_changes), methods=["POST"]),
         Route("/api/internet", api(internet), methods=["POST"]),
         Route("/api/home", api(home)),
         Route("/api/scan", api(scan_status)),

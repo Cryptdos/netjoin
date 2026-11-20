@@ -155,6 +155,9 @@ class WindowsBackend(Backend):
         gw = f"gateway={gateway} gwmetric={GW_METRIC}" if gateway else "gateway=none"
         self._check(*_run(f"netsh interface ipv4 set address name={_q(name)} source=static "
                           f"address={ip} mask={mask} {gw}"))
+        self.set_dns(name, dns)
+
+    def set_dns(self, name: str, dns: list[str]) -> None:
         if dns:
             self._check(*_run(f"netsh interface ipv4 set dnsservers name={_q(name)} source=static "
                               f"address={dns[0]} register=none validate=no"))
@@ -164,6 +167,15 @@ class WindowsBackend(Backend):
         else:
             self._check(*_run(f"netsh interface ipv4 set dnsservers name={_q(name)} source=static "
                               f"address=none register=none validate=no"), ("element not found",))
+
+    def set_gateway(self, name: str, ip: str, prefix: int, gateway: str | None) -> None:
+        # Swap only the default route on this adapter. The address isn't removed and re-added (which
+        # 'set address' would do), so TCP sessions to devices on the subnet stay up.
+        _run(f"netsh interface ipv4 delete route prefix=0.0.0.0/0 interface={_q(name)} store=active")
+        _run(f"netsh interface ipv4 delete route prefix=0.0.0.0/0 interface={_q(name)} store=persistent")
+        if gateway:
+            self._check(*_run(f"netsh interface ipv4 add route prefix=0.0.0.0/0 interface={_q(name)} "
+                              f"nexthop={gateway} metric={GW_METRIC} store=persistent"), ("object already exists",))
 
     def set_dhcp(self, name: str) -> None:
         self._check(*_run(f"netsh interface ipv4 set address name={_q(name)} source=dhcp"),

@@ -219,6 +219,48 @@ function joinedLink(j) {
   return el("button", { type: "button", class: "netlink", title: `Open ${j.path || j.network}`, onclick: () => goTo(j.network_id) }, j.network);
 }
 
+// ---------- edits to the network the laptop is on ----------
+// The server applies gateway / DNS changes straight away without touching the address, and asks (via
+// this dialog) before anything that could drop traffic: a new address (rejoin) or swapping a gateway in use.
+function askApply({ title, msg, risk, now }) {
+  const dlg = $("#applyDlg");
+  $("#applyTitle").textContent = title; $("#applyMsg").textContent = msg; $("#applyRisk").textContent = risk;
+  $("#applyNow").textContent = now;
+  return new Promise((resolve) => {
+    const done = (v) => { dlg.close(); resolve(v); };
+    $("#applyNow").onclick = () => done(true); $("#applyLater").onclick = () => done(false);
+    dlg.oncancel = () => resolve(false);
+    dlg.showModal(); $("#applyLater").focus();       // the safe choice has focus
+  });
+}
+async function handleLive(live) {
+  if (!live || !live.changed) return;
+  const where = `${live.network} (${live.adapter}, ${live.ip})`;
+  if (live.applied && live.applied.length) {
+    flash(`Applied to ${live.adapter} now: ${live.applied.join(" · ")}. Address ${live.ip} unchanged, connections kept` +
+      (live.internet != null ? ` · ${inetInfo(live.internet).text}` : ""), live.internet === 2 ? "warn" : "info");
+  }
+  if (live.ask === "gateway") {
+    const ok = await askApply({ title: "Change the gateway now?",
+      msg: `You're on ${where}, and ${live.reason}.`,
+      risk: "Devices on this network aren't affected and the address stays. Anything going out through the current gateway – an internet download, a remote session – may stop. Choose Later to keep the current gateway until your next Join.",
+      now: "Change gateway now" });
+    if (ok) {
+      try { const r = await api("/apply-changes", { method: "POST", body: { gateway: true } }); await handleLive(r); }
+      catch (e) { flash(e.message, "error"); }
+    } else flash(`Saved. ${live.adapter} keeps gateway ${live.gateway.from} until you next Join ${live.network}.`);
+  } else if (live.ask === "rejoin") {
+    const ok = await askApply({ title: "Rejoin with the new settings?",
+      msg: `You're on ${where}, and ${live.reason}, so the laptop needs a new address.`,
+      risk: "Rejoining drops the connection for a few seconds – a download, sync or upload to a controller may fail. Choose Later to keep the current address until you're ready, then press Join.",
+      now: "Rejoin now" });
+    if (ok) await joinNetwork(live.network_id, null, null);
+    else flash(`Saved. ${live.adapter} stays on ${live.ip} until you Join ${live.network} again.`, "warn");
+  }
+  await refreshStatus(); refreshLog();
+  if (state.selected === live.network_id || state.selected === "home") refreshDetail();
+}
+
 // ---------- page head: crumbs, title and page buttons live in the top bar ----------
 function setHead(crumbs, title, actions) {
   $("#tbCrumbs").replaceChildren(crumbs);       // the last crumb is the page title
@@ -274,12 +316,18 @@ async function refreshDetail() {
     el("div", { class: "tiles" },
       tile("Network", nw ? `${ip4.str(nw.net)}/${nw.prefix}` : d.subnet, nw ? nw.mask : null, nw ? `${netText(d.subnet)} · usable ${ip4.str(nw.first)} – ${ip4.str(nw.last)}` : null),
       tile("Gateway / DNS", `${r.gateway || "—"} / ${r.dns.length ? r.dns.join(", ") : "—"}`,
-        r.gateway_from || r.dns_from ? `from ${[r.gateway_from, r.dns_from].filter(Boolean).join(" · ")}` : "none set"),
+        r.gateway_from || r.dns_from ? `from ${[...new Set([r.gateway_from, r.dns_from].filter(Boolean))].join(" · ")}` : "none set"),
       // The address Join will try first, and how it was picked; the allowed range is in the tooltip.
       tile("Join IP", d.next_ip || (d.next_how === "random from the range" ? "random" : "none free"),
         d.addr_mode === "fixed" ? "static IP" : (d.next_how || null),
         d.addr_mode === "fixed" ? "Static IP – Join always uses this address"
           : `Join tries this address first. Allowed range ${shortIp(d.range_start, pfx)} – ${shortIp(d.range_end, pfx)} (${d.range_start} – ${d.range_end}), ${ALLOC_TEXT[d.alloc] || "first free"}.`)),
+    ...(d.pending ? [el("div", { class: "pending" },
+      el("span", {}, "⚠ Saved changes aren't on the adapter yet – " + (d.pending.rejoin ? `${d.pending.rejoin}; Join to use them.`
+        : d.pending.gateway ? (d.pending.gateway.to ? `gateway ${d.pending.gateway.from || "none"} → ${d.pending.gateway.to}.` : `gateway ${d.pending.gateway.from} to be removed.`)
+        : "DNS differs.")),
+      el("button", { type: "button", class: "btn small", onclick: async () => {
+        try { await handleLive(await api("/apply-changes", { method: "POST", body: {} })); } catch (e) { flash(e.message, "error"); } } }, "Apply…"))] : []),
     ...(d.notes ? [el("p", { class: "notes", title: d.notes }, "Notes: ", d.notes.replace(/\s*\n\s*/g, " · "))] : []));
   renderHistory();
 }
@@ -1143,11 +1191,12 @@ $("#nodeForm").addEventListener("submit", async (e) => {
   }
   try {
     let n;
-    if (id) n = await api(`/nodes/${id}`, { method: "PUT", body });
+    if (id) { n = await api(`/nodes/${id}`, { method: "PUT", body }); }
     else { n = await api("/nodes", { method: "POST", body: { ...body, kind: f.kind.value, parent_id: f.parent_id.value === "" ? null : Number(f.parent_id.value) } });
       if (n.parent_id != null) state.expanded.add(n.parent_id); state.selected = n.id; saveUi(); }
     $("#nodeDlg").close();
     await refreshTree(); await refreshDetail(); refreshLog();
+    if (n && n.live) await handleLive(n.live);
   } catch (err) { $("#nodeErr").textContent = err.message; }
 });
 $("#cancelNode").addEventListener("click", () => $("#nodeDlg").close());
@@ -1207,8 +1256,9 @@ $("#settingsBtn").addEventListener("click", async () => {
 });
 $("#settingsForm").addEventListener("submit", async (e) => {
   e.preventDefault(); const f = e.target;
-  try { await api("/settings/global", { method: "PUT", body: { gw_override: f.gw_override.checked, gateway: f.gateway.value, dns_override: f.dns_override.checked, dns: f.dns.value } });
-    $("#settingsDlg").close(); await refreshDetail(); refreshLog(); }
+  try { const g = await api("/settings/global", { method: "PUT", body: { gw_override: f.gw_override.checked, gateway: f.gateway.value, dns_override: f.dns_override.checked, dns: f.dns.value } });
+    $("#settingsDlg").close(); await refreshDetail(); refreshLog();
+    if (g.live) await handleLive(g.live); }
   catch (err) { $("#settingsErr").textContent = err.message; }
 });
 $("#cancelSettings").addEventListener("click", () => $("#settingsDlg").close());

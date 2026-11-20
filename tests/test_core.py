@@ -117,6 +117,34 @@ class StoreAndJoin(unittest.TestCase):
             self.store.create_node("network", self.area["id"], {"name": "x", "subnet": "10.0.0.0/24",
                                                                   "range_start": "10.0.1.5", "range_end": "10.0.0.9"})
 
+    def test_edit_applies_live_or_asks(self):
+        self.engine.join(self.net["id"])                              # on 10.20.5.201, no gateway / DNS
+        name = self.engine.adapter().name
+        nid = self.net["id"]
+        # Adding a gateway + DNS: applied straight away, address untouched
+        self.store.update_node(nid, {"gw_override": 1, "gateway": "10.20.5.1", "dns_override": 1, "dns": "10.20.5.1"})
+        r = self.engine.apply_config_changes()
+        self.assertEqual((r["ask"], r["applied"]), (None, ["DNS 10.20.5.1", "gateway 10.20.5.1"]))
+        a = self.engine.backend.get_adapter(name)
+        self.assertEqual((a.primary.ip, a.gateways, a.dns), ("10.20.5.201", ["10.20.5.1"], ["10.20.5.1"]))
+        self.assertEqual(self.engine.apply_config_changes(), {"changed": False})      # nothing left to do
+        # Replacing a gateway that's in use: ask first, then apply when confirmed
+        self.store.update_node(nid, {"gateway": "10.20.5.254"})
+        r = self.engine.apply_config_changes()
+        self.assertEqual(r["ask"], "gateway")
+        self.assertEqual(self.engine.backend.get_adapter(name).gateways, ["10.20.5.1"])
+        r = self.engine.apply_config_changes(confirm_gateway=True)
+        self.assertEqual((r["ask"], self.engine.backend.get_adapter(name).gateways), (None, ["10.20.5.254"]))
+        # A change that needs a new address: ask to rejoin, change nothing
+        self.store.update_node(nid, {"range_start": "10.20.5.10", "range_end": "10.20.5.20"})
+        r = self.engine.apply_config_changes()
+        self.assertEqual(r["ask"], "rejoin")
+        self.assertIn("outside the new range", r["reason"])
+        self.assertEqual(self.engine.backend.get_adapter(name).primary.ip, "10.20.5.201")
+        # Not joined → nothing to do
+        self.engine.dhcp()
+        self.assertEqual(self.engine.apply_config_changes(), {"changed": False})
+
     def test_join_skips_clash(self):
         r = self.engine.join(self.net["id"])          # .200 is "taken" in the fake back-end
         self.assertEqual((r["ip"], r["attempts"]), ("10.20.5.201", 2))

@@ -61,6 +61,20 @@ class FakeBackend(Backend):
             a.gateways = [gateway] if gateway else []
             a.dns = list(dns)
 
+    def set_gateway(self, name, ip, prefix, gateway):
+        with self._lock:
+            a = self._adapters.get(name)
+            if not a:
+                raise NetError(f"No adapter called {name}")
+            a.gateways = [gateway] if gateway else []
+
+    def set_dns(self, name, dns):
+        with self._lock:
+            a = self._adapters.get(name)
+            if not a:
+                raise NetError(f"No adapter called {name}")
+            a.dns = list(dns)
+
     def set_dhcp(self, name):
         with self._lock:
             a = self._adapters.get(name)

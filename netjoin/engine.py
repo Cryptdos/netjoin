@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ipaddress
+
 import random
 import threading
 from typing import Any
@@ -236,6 +238,75 @@ class Engine:
             self.internet_cache.pop(a.name, None)
             self.log.add(f"{a.name} set back to DHCP")
             return {"ok": True}
+
+    # ---------- edited settings vs. what's on the adapter now ----------
+    def config_drift(self) -> dict | None:
+        """If the laptop is on a network NetJoin joined, compare that network's saved settings with what
+        the adapter actually has. None when not joined (or the adapter has moved on)."""
+        applied = self.store.get_setting("applied")
+        if not applied:
+            return None
+        n = self.store.node(applied.get("network_id", -1))
+        a = self.backend.get_adapter(applied.get("adapter", ""))
+        if not n or not a or a.dhcp or not a.primary or a.primary.ip != applied.get("ip"):
+            return None
+        ip = applied["ip"]
+        rejoin = None
+        try:
+            net = ipcalc.parse_subnet(n["subnet"])
+            addr = ipaddress.ip_address(ip)
+            if addr not in net or a.primary.prefix != net.prefixlen:
+                rejoin = f"the network is now {net}, and {ip}/{a.primary.prefix} isn't on it"
+            elif (n.get("addr_mode") or "range") == "fixed" and n.get("fixed_ip") and n["fixed_ip"] != ip:
+                rejoin = f"the static IP is now {n['fixed_ip']}"
+            elif (n.get("addr_mode") or "range") != "fixed" and n.get("range_start") and n.get("range_end") and not (
+                    ipaddress.ip_address(n["range_start"]) <= addr <= ipaddress.ip_address(n["range_end"])):
+                rejoin = f"{ip} is outside the new range {n['range_start']} – {n['range_end']}"
+        except ValueError:
+            pass
+        want = self.store.resolve_gateway_dns(n["id"])
+        cur_gw = a.gateways[0] if a.gateways else None
+        return {"network_id": n["id"], "network": n["name"], "adapter": a.name, "ip": ip, "prefix": a.primary.prefix,
+                "rejoin": rejoin,
+                "gateway": {"from": cur_gw, "to": want["gateway"]} if (want["gateway"] or None) != cur_gw else None,
+                "dns": {"from": list(a.dns), "to": list(want["dns"])} if list(want["dns"]) != list(a.dns) else None}
+
+    def apply_config_changes(self, confirm_gateway: bool = False) -> dict:
+        """After an edit: put gateway / DNS changes on the adapter straight away without touching its
+        address (connections to the subnet carry on). Ask first (return 'ask') when:
+          - the address itself has to change → 'rejoin' (the connection drops for a few seconds), or
+          - a gateway that's in use would be replaced or removed → 'gateway' (traffic through it,
+            e.g. an internet download, could stop; devices on the subnet aren't affected)."""
+        if not self.backend.is_admin():
+            return {"changed": False}
+        with self._net_lock:
+            d = self.config_drift()
+            if not d or not (d["rejoin"] or d["gateway"] or d["dns"]):
+                return {"changed": False}
+            out = {"changed": True, "network_id": d["network_id"], "network": d["network"], "adapter": d["adapter"],
+                   "ip": d["ip"], "applied": [], "ask": None, "reason": None, "gateway": d["gateway"], "dns": d["dns"]}
+            if d["rejoin"]:
+                out.update(ask="rejoin", reason=d["rejoin"])
+                return out
+            try:
+                if d["dns"]:
+                    self.backend.set_dns(d["adapter"], d["dns"]["to"])
+                    out["applied"].append("DNS " + (", ".join(d["dns"]["to"]) or "cleared"))
+                if d["gateway"]:
+                    if d["gateway"]["from"] and not confirm_gateway:
+                        out.update(ask="gateway", reason=(f"the gateway changes from {d['gateway']['from']} to {d['gateway']['to']}"
+                                                          if d["gateway"]["to"] else f"the gateway {d['gateway']['from']} is removed"))
+                    else:
+                        self.backend.set_gateway(d["adapter"], d["ip"], d["prefix"], d["gateway"]["to"])
+                        out["applied"].append(f"gateway {d['gateway']['to']}" if d["gateway"]["to"] else "gateway removed")
+            except NetError as e:
+                self.log.add(f"Couldn't update {d['adapter']}: {e}", "error")
+                raise JoinError(str(e))
+            if out["applied"]:
+                self.log.add(f"Updated {d['adapter']} for {d['network']}: {'; '.join(out['applied'])} – address {d['ip']} unchanged")
+                chk = self.backend.check_internet(d["ip"], self.store.resolve_gateway_dns(d["network_id"])["dns"])
+                self.internet_cache[d["adapter"]] = out["internet"] = chk["code"]
+            return out
 
     def still_applied(self) -> dict | None:
         """The static IP NetJoin last applied, if that adapter still has it (used when quitting)."""

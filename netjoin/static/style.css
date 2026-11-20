@@ -487,3 +487,5 @@ body.at-home #detail{display:none}
 .tb-sub .ccard{padding:4px 10px;font-size:13px}
 .tb-sub .notes{margin:0;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 @media (max-width: 640px){ .tb-sub{padding:8px 12px} .tb-sub .tile{border-right:0;margin-right:0;padding-right:0;flex:1 1 100%} .tb-sub .tile .v{white-space:normal} }
+.tb-sub .pending{display:flex;align-items:center;gap:10px;font-size:12px;color:var(--warn);background:var(--warn-bg);border:1px solid var(--warn-line);border-radius:6px;padding:4px 6px 4px 10px;align-self:flex-start;max-width:100%}
+.tb-sub .pending .btn{flex:none}
