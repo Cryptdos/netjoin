@@ -211,7 +211,11 @@ async function refreshDetail() {
     renderHistory(); return;
   }
   const d = state.detail = await api(`/nodes/${state.selected}`);
-  const crumbs = el("span", { class: "crumbs" }, d.path.slice(0, -1).join(" › ") || (d.kind === "site" ? "Site" : ""));
+  // Breadcrumbs: each part goes to that site / area.
+  const crumbs = el("nav", { class: "crumbs", "aria-label": "Breadcrumb" },
+    d.crumbs.length ? d.crumbs.flatMap((c, i) => [i ? el("span", { class: "sep", "aria-hidden": "true" }, " › ") : null,
+      el("button", { type: "button", class: "crumb", title: `Go to ${c.kind} ${c.name}`, onclick: () => goTo(c.id) }, c.name)])
+      : [el("span", {}, d.kind === "site" ? "Site" : "")]);
   const editBtn = el("button", { type: "button", class: "btn", onclick: () => openNode({ node: d }) }, "Edit");
   if (d.kind !== "network") {
     box.replaceChildren(el("div", { class: "dhead" },
@@ -234,10 +238,7 @@ async function refreshDetail() {
       el("div", { class: "row", style: "flex-direction:column;align-items:flex-start;gap:4px" }, crumbs, el("h1", {}, d.name)),
       el("div", { style: "margin-top:22px" }, inetPill),
       el("div", { class: "spacer" }),
-      el("div", { class: "row" }, editBtn,
-        el("button", { type: "button", class: "btn", disabled: !d.on_subnet || state.scan.running,
-          title: d.on_subnet ? "Quick scan: ARP sweep + BACnet Who-Is" : "Join this network first, then scan",
-          onclick: () => startScan("quick") }, "Scan"), joinBtn)),
+      el("div", { class: "row" }, historyMenu(), editBtn, joinBtn)),
     el("div", { class: "tiles" },
       tile("Network", netText(d.subnet), netFromCidr(d.subnet) ? `usable ${ip4.str(netFromCidr(d.subnet).first)} – ${ip4.str(netFromCidr(d.subnet).last)}` : null),
       d.addr_mode === "fixed"
@@ -253,14 +254,28 @@ async function refreshDetail() {
 const ALLOC_TEXT = { first: "first free", last: "last free", random: "random", sticky: "last used, then first" };
 function netText(cidr) { const nw = netFromCidr(cidr); return nw ? `${ip4.str(nw.net)} · ${nw.mask} (/${nw.prefix})` : cidr; }
 
+// IP history lives in a drop-down next to Edit / Join, so the Devices panel gets the full width.
+function historyMenu() {
+  const n = state.detail && state.detail.history ? state.detail.history.length : 0;
+  const m = el("details", { class: "menu", id: "histMenu" },
+    el("summary", { class: "btn", title: "Addresses this laptop has used on this network" }, `History${n ? ` (${n})` : ""} ▾`),
+    el("div", { class: "menu-list hist-pop" }, el("ul", { id: "history", class: "hist" }),
+      el("p", { class: "small muted", style: "margin:6px 4px 2px" }, "Click an address to join with it again.")));
+  return m;
+}
+document.addEventListener("click", (e) => { const m = $("#histMenu"); if (m && m.open && !m.contains(e.target)) m.open = false; });
+
+function goTo(id) { const n = findNode(id); if (n) select(n); }
+
 function renderHistory() {
   renderScanMenu(); refreshDevices();
   const ul = $("#history");
   const d = state.detail;
+  if (!ul) return;
   if (!d || d.kind !== "network") { ul.replaceChildren(el("li", { class: "empty" }, "Select a network.")); return; }
   if (!d.history.length) { ul.replaceChildren(el("li", { class: "empty" }, "No joins yet.")); return; }
   ul.replaceChildren(...d.history.map((h) => el("li", {},
-    el("button", { type: "button", title: `Join with ${h.ip}`, onclick: (e) => doJoin(e.currentTarget, h.ip) },
+    el("button", { type: "button", title: `Join with ${h.ip}`, onclick: (e) => { const m = $("#histMenu"); if (m) m.open = false; doJoin(null, h.ip); } },
       el("span", { class: "ip" }, h.ip),
       h.result === "worked" && h.internet === 1 ? el("span", { class: "inet yes", title: "Had internet" }, globe(false)) : null,
       el("span", { class: "tag " + h.result }, h.result === "worked" ? "✓ Worked" : h.result === "clashed" ? "! Clashed" : "× Failed"),
@@ -791,6 +806,22 @@ async function refreshLog() {
     while (box.childElementCount > 200) box.lastElementChild.remove();
   } catch (e) {}
 }
+
+// ---------- Sites sidebar: show / hide (remembered) ----------
+(function navToggle() {
+  let open = true;
+  try { open = localStorage.getItem("nj.navOpen") !== "0"; } catch (e) {}
+  const apply = () => { document.body.classList.toggle("nav-collapsed", !open); $("#navToggle").setAttribute("aria-expanded", String(open)); };
+  const set = (v) => { open = v; apply(); try { localStorage.setItem("nj.navOpen", open ? "1" : "0"); } catch (e) {} };
+  $("#navToggle").addEventListener("click", () => set(!open));
+  // "/" anywhere (not while typing): open Sites and jump to its search box
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName) || document.querySelector("dialog[open]")) return;
+    e.preventDefault(); set(true); $("#search").focus();
+  });
+  apply();
+})();
 
 // ---------- activity log open / closed ----------
 (function logToggle() {

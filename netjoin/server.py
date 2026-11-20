@@ -112,7 +112,8 @@ def node_detail(req, data):
     n = s.node(nid)
     if not n:
         raise StoreError("Not found")
-    out = {**n, "path": s.path_names(nid)}
+    out = {**n, "path": s.path_names(nid),
+           "crumbs": [{"id": a["id"], "name": a["name"], "kind": a["kind"]} for a in reversed(s.ancestors(nid)[1:])]}
     if n["kind"] == "network":
         out["resolved"] = s.resolve_gateway_dns(nid)
         nx = eng().next_ip(n)
