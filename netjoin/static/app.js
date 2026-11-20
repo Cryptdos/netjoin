@@ -246,15 +246,15 @@ async function handleLive(live) {
     flash(`Applied to ${live.adapter} now: ${live.applied.join(" · ")}. Address ${live.ip} unchanged, connections kept` +
       (live.internet != null ? ` · ${inetInfo(live.internet).text}` : ""), live.internet === 2 ? "warn" : "info");
   }
-  if (live.ask === "gateway") {
-    const ok = await askApply({ title: "Change the gateway now?",
-      msg: `You're on ${where}, and ${live.reason}.`,
-      risk: "Devices on this network aren't affected and the address stays. Anything going out through the current gateway – an internet download, a remote session – may stop. Choose Later to keep the current gateway until your next Join.",
-      now: "Change gateway now" });
+  if (live.ask === "confirm") {
+    const ok = await askApply({ title: "Apply these changes now?",
+      msg: `You're on ${where}. This save changes settings that are in use: ${live.changes.join("; ")}.`,
+      risk: "The address stays and devices on this network aren't affected. Anything going out through the gateway (an internet download, a remote session) may stop, and web pages and other name lookups use the new DNS. Choose Later to keep everything as it is until you apply or Join again.",
+      now: "Apply now" });
     if (ok) {
-      try { const r = await api("/apply-changes", { method: "POST", body: { gateway: true } }); await handleLive(r); }
+      try { const r = await api("/apply-changes", { method: "POST", body: { confirm: true } }); await handleLive(r); }
       catch (e) { flash(e.message, "error"); }
-    } else flash(`Saved. ${live.adapter} keeps gateway ${live.gateway.from} until you next Join ${live.network}.`);
+    } else flash(`Saved. Nothing on ${live.adapter} has changed – apply it from the note under the bar, or Join ${live.network} again.`);
   } else if (live.ask === "rejoin") {
     const ok = await askApply({ title: "Rejoin with the new settings?",
       msg: `You're on ${where}, and ${live.reason}, so the laptop needs a new address.`,
@@ -336,8 +336,8 @@ async function refreshDetail() {
           : `Join tries this address first. Allowed range ${shortIp(d.range_start, pfx)} – ${shortIp(d.range_end, pfx)} (${d.range_start} – ${d.range_end}), ${ALLOC_TEXT[d.alloc] || "first free"}.`)),
     ...(d.pending ? [el("div", { class: "pending" },
       el("span", {}, "⚠ Saved changes aren't on the adapter yet – " + (d.pending.rejoin ? `${d.pending.rejoin}; Join to use them.`
-        : d.pending.gateway ? (d.pending.gateway.to ? `gateway ${d.pending.gateway.from || "none"} → ${d.pending.gateway.to}.` : `gateway ${d.pending.gateway.from} to be removed.`)
-        : "DNS differs.")),
+        : [d.pending.gateway ? `gateway ${d.pending.gateway.from || "none"} → ${d.pending.gateway.to || "none"}` : null,
+           d.pending.dns ? `DNS ${d.pending.dns.from.join(", ") || "none"} → ${d.pending.dns.to.join(", ") || "none"}` : null].filter(Boolean).join(" · ") + ".")),
       el("button", { type: "button", class: "btn small", onclick: async () => {
         try { await handleLive(await api("/apply-changes", { method: "POST", body: {} })); } catch (e) { flash(e.message, "error"); } } }, "Apply…"))] : []),
     ...(d.notes ? [el("p", { class: "notes", title: d.notes }, "Notes: ", d.notes.replace(/\s*\n\s*/g, " · "))] : []));

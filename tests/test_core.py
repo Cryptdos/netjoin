@@ -128,13 +128,16 @@ class StoreAndJoin(unittest.TestCase):
         a = self.engine.backend.get_adapter(name)
         self.assertEqual((a.primary.ip, a.gateways, a.dns), ("10.20.5.201", ["10.20.5.1"], ["10.20.5.1"]))
         self.assertEqual(self.engine.apply_config_changes(), {"changed": False})      # nothing left to do
-        # Replacing a gateway that's in use: ask first, then apply when confirmed
-        self.store.update_node(nid, {"gateway": "10.20.5.254"})
+        # Removing DNS and replacing the gateway (both in use): ask first and change NOTHING until confirmed
+        self.store.update_node(nid, {"gateway": "10.20.5.254", "dns_override": 0})
         r = self.engine.apply_config_changes()
-        self.assertEqual(r["ask"], "gateway")
-        self.assertEqual(self.engine.backend.get_adapter(name).gateways, ["10.20.5.1"])
-        r = self.engine.apply_config_changes(confirm_gateway=True)
-        self.assertEqual((r["ask"], self.engine.backend.get_adapter(name).gateways), (None, ["10.20.5.254"]))
+        self.assertEqual((r["ask"], r["applied"]), ("confirm", []))
+        self.assertEqual(r["changes"], ["gateway 10.20.5.1 → 10.20.5.254", "DNS 10.20.5.1 → none (removed)"])
+        a = self.engine.backend.get_adapter(name)
+        self.assertEqual((a.gateways, a.dns), (["10.20.5.1"], ["10.20.5.1"]))          # untouched
+        r = self.engine.apply_config_changes(confirm=True)
+        a = self.engine.backend.get_adapter(name)
+        self.assertEqual((r["ask"], a.gateways, a.dns, a.primary.ip), (None, ["10.20.5.254"], [], "10.20.5.201"))
         # A change that needs a new address: ask to rejoin, change nothing
         self.store.update_node(nid, {"range_start": "10.20.5.10", "range_end": "10.20.5.20"})
         r = self.engine.apply_config_changes()

@@ -149,7 +149,7 @@ def update_node(req, data):
 
 
 def apply_changes(req, data):
-    return eng().apply_config_changes(confirm_gateway=bool(data.get("gateway")))
+    return eng().apply_config_changes(confirm=bool(data.get("confirm") or data.get("gateway")))
 
 
 def delete_node(req, data):

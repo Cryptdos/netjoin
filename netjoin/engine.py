@@ -271,12 +271,14 @@ class Engine:
                 "gateway": {"from": cur_gw, "to": want["gateway"]} if (want["gateway"] or None) != cur_gw else None,
                 "dns": {"from": list(a.dns), "to": list(want["dns"])} if list(want["dns"]) != list(a.dns) else None}
 
-    def apply_config_changes(self, confirm_gateway: bool = False) -> dict:
-        """After an edit: put gateway / DNS changes on the adapter straight away without touching its
-        address (connections to the subnet carry on). Ask first (return 'ask') when:
-          - the address itself has to change → 'rejoin' (the connection drops for a few seconds), or
-          - a gateway that's in use would be replaced or removed → 'gateway' (traffic through it,
-            e.g. an internet download, could stop; devices on the subnet aren't affected)."""
+    def apply_config_changes(self, confirm: bool = False) -> dict:
+        """After an edit: compare the saved settings with the adapter of the network the laptop is on.
+
+        - Purely additive changes (DNS or a gateway where there was none) go on straight away: the
+          address isn't touched and nothing that's working can stop.
+        - Anything that changes or removes a gateway / DNS that's in use asks first (ask='confirm'),
+          and nothing from that save is applied until confirmed – "Later" means later for all of it.
+        - Anything that needs a new address asks to rejoin (ask='rejoin'); nothing is applied."""
         if not self.backend.is_admin():
             return {"changed": False}
         with self._net_lock:
@@ -284,28 +286,34 @@ class Engine:
             if not d or not (d["rejoin"] or d["gateway"] or d["dns"]):
                 return {"changed": False}
             out = {"changed": True, "network_id": d["network_id"], "network": d["network"], "adapter": d["adapter"],
-                   "ip": d["ip"], "applied": [], "ask": None, "reason": None, "gateway": d["gateway"], "dns": d["dns"]}
+                   "ip": d["ip"], "applied": [], "ask": None, "reason": None, "changes": [],
+                   "gateway": d["gateway"], "dns": d["dns"]}
+            if d["gateway"]:
+                g = d["gateway"]
+                out["changes"].append(f"gateway {g['from'] or 'none'} → {g['to'] or 'none (removed)'}")
+            if d["dns"]:
+                n = d["dns"]
+                out["changes"].append(f"DNS {', '.join(n['from']) or 'none'} → {', '.join(n['to']) or 'none (removed)'}")
             if d["rejoin"]:
                 out.update(ask="rejoin", reason=d["rejoin"])
+                return out
+            risky = bool((d["gateway"] and d["gateway"]["from"]) or (d["dns"] and d["dns"]["from"]))
+            if risky and not confirm:
+                out.update(ask="confirm", reason="; ".join(out["changes"]))
                 return out
             try:
                 if d["dns"]:
                     self.backend.set_dns(d["adapter"], d["dns"]["to"])
-                    out["applied"].append("DNS " + (", ".join(d["dns"]["to"]) or "cleared"))
+                    out["applied"].append("DNS " + (", ".join(d["dns"]["to"]) or "removed"))
                 if d["gateway"]:
-                    if d["gateway"]["from"] and not confirm_gateway:
-                        out.update(ask="gateway", reason=(f"the gateway changes from {d['gateway']['from']} to {d['gateway']['to']}"
-                                                          if d["gateway"]["to"] else f"the gateway {d['gateway']['from']} is removed"))
-                    else:
-                        self.backend.set_gateway(d["adapter"], d["ip"], d["prefix"], d["gateway"]["to"])
-                        out["applied"].append(f"gateway {d['gateway']['to']}" if d["gateway"]["to"] else "gateway removed")
+                    self.backend.set_gateway(d["adapter"], d["ip"], d["prefix"], d["gateway"]["to"])
+                    out["applied"].append(f"gateway {d['gateway']['to']}" if d["gateway"]["to"] else "gateway removed")
             except NetError as e:
                 self.log.add(f"Couldn't update {d['adapter']}: {e}", "error")
                 raise JoinError(str(e))
-            if out["applied"]:
-                self.log.add(f"Updated {d['adapter']} for {d['network']}: {'; '.join(out['applied'])} – address {d['ip']} unchanged")
-                chk = self.backend.check_internet(d["ip"], self.store.resolve_gateway_dns(d["network_id"])["dns"])
-                self.internet_cache[d["adapter"]] = out["internet"] = chk["code"]
+            self.log.add(f"Updated {d['adapter']} for {d['network']}: {'; '.join(out['applied'])} – address {d['ip']} unchanged")
+            chk = self.backend.check_internet(d["ip"], self.store.resolve_gateway_dns(d["network_id"])["dns"])
+            self.internet_cache[d["adapter"]] = out["internet"] = chk["code"]
             return out
 
     def still_applied(self) -> dict | None:
