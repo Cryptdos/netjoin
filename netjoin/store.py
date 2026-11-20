@@ -67,7 +67,20 @@ CREATE TABLE IF NOT EXISTS devices(
     UNIQUE(subnet, key)
 );
 CREATE INDEX IF NOT EXISTS devices_subnet ON devices(subnet);
+CREATE TABLE IF NOT EXISTS scans(
+    id INTEGER PRIMARY KEY,
+    subnet TEXT NOT NULL,
+    started TEXT NOT NULL,
+    finished TEXT NOT NULL,
+    label TEXT,
+    methods TEXT NOT NULL           -- comma-separated steps that ran: arp, ping, bacnet, ports, passive
+);
+CREATE INDEX IF NOT EXISTS scans_subnet ON scans(subnet, started);
 """
+
+# A device is only judged "inactive" by scans that used a method that found it before.
+# Passive listening and the port check aren't evidence of absence (quiet devices; no open ports).
+ACTIVE_METHODS = {"arp", "ping", "bacnet"}
 
 ALLOWED_PARENTS = {"site": {None}, "area": {"site", "area"}, "network": {"site", "area"}}
 NODE_FIELDS = ("name", "subnet", "range_start", "range_end", "gw_override", "gateway",
@@ -81,7 +94,7 @@ class StoreError(ValueError):
 
 
 def now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
 
 
 class Store:
@@ -193,7 +206,7 @@ class Store:
         try:
             net = ipcalc.parse_subnet(rec.get("subnet") or "")
         except ValueError:
-            raise StoreError("Enter an IP on the network and pick a mask (e.g. 10.20.5.0 and 255.255.255.0)")
+            raise StoreError("Enter the IP Network and pick a mask (e.g. 192.168.0.1 and 255.255.255.0)")
         if net.prefixlen > 30:
             raise StoreError("The mask leaves no room for devices – use /30 or bigger")
         rec["subnet"] = str(net)
@@ -210,17 +223,17 @@ class Store:
                 raise StoreError(f"{label} {rec[k]} isn't a usable address in {net}")
         rec["addr_mode"] = rec.get("addr_mode") or "range"
         if rec["addr_mode"] not in ADDR_MODES:
-            raise StoreError("Laptop address must be 'range' or 'fixed'")
+            raise StoreError("Laptop address must be the allowed range or a static IP")
         rec["alloc"] = rec.get("alloc") or "first"
         if rec["alloc"] not in ALLOC_ORDERS:
             raise StoreError("Unknown allocation order")
         if rec["addr_mode"] == "fixed":
             if not rec.get("fixed_ip"):
-                raise StoreError("Enter the fixed IP for this laptop")
+                raise StoreError("Enter the static IP for this laptop")
             if not ipcalc.in_subnet(rec["fixed_ip"], net):
-                raise StoreError(f"Fixed IP {rec['fixed_ip']} isn't a usable address in {net}")
+                raise StoreError(f"Static IP {rec['fixed_ip']} isn't a usable address in {net}")
         elif rec.get("fixed_ip") and not ipcalc.in_subnet(rec["fixed_ip"], net):
-            rec["fixed_ip"] = None      # stale fixed IP from an old subnet; not in use
+            rec["fixed_ip"] = None      # stale static IP from an old subnet; not in use
         if rec.get("gateway") and not ipcalc.in_subnet(rec["gateway"], net):
             raise StoreError("Gateway must be inside the network")
         return rec
@@ -377,8 +390,45 @@ class Store:
             self.db.commit()
         return n
 
+    def set_device_fields(self, subnet: str, key: str, **fields) -> None:
+        """Update details (manufacturer, ports…) without counting the device as seen again."""
+        if not fields:
+            return
+        if "ports" in fields:
+            p = fields["ports"]
+            fields["ports"] = ",".join(str(x) for x in sorted(p)) if p else None
+        sets = ",".join(f"{k}=?" for k in fields)
+        with self._lock:
+            self.db.execute(f"UPDATE devices SET {sets} WHERE subnet=? AND key=?", (*fields.values(), subnet, key))
+            self.db.commit()
+
+    def record_scan(self, subnet: str, started: str, label: str, methods: list[str]) -> None:
+        with self._lock:
+            self.db.execute("INSERT INTO scans(subnet,started,finished,label,methods) VALUES(?,?,?,?,?)",
+                            (subnet, started, now(), label, ",".join(dict.fromkeys(methods))))
+            # keep the last 200 scans per subnet
+            self.db.execute("DELETE FROM scans WHERE subnet=? AND id NOT IN "
+                            "(SELECT id FROM scans WHERE subnet=? ORDER BY id DESC LIMIT 200)", (subnet, subnet))
+            self.db.commit()
+
+    def scans(self, subnet: str, limit: int = 50) -> list[dict]:
+        return [dict(r) for r in self.db.execute("SELECT * FROM scans WHERE subnet=? ORDER BY id DESC LIMIT ?",
+                                                 (subnet, limit))]
+
     def devices(self, subnet: str) -> list[dict]:
+        """Devices on a subnet, each flagged 'inactive' (missed the latest scan that could have found it)
+        and 'new' (first seen in the latest scan, when there was an earlier one)."""
         rows = [dict(r) for r in self.db.execute("SELECT * FROM devices WHERE subnet=?", (subnet,))]
+        scans = self.scans(subnet)
+        latest = scans[0] if scans else None
+        for r in rows:
+            srcs = set(filter(None, (r["sources"] or "").split(",")))
+            r["is_self"] = "self" in srcs
+            relevant = srcs & ACTIVE_METHODS
+            judge = next((sc for sc in scans if relevant & set(sc["methods"].split(","))), None)
+            r["inactive"] = bool(judge and not r["is_self"] and (r["last_seen"] or "") < judge["started"])
+            r["new"] = bool(latest and len(scans) > 1 and not r["is_self"] and not r["inactive"]
+                            and (r["first_seen"] or "") >= latest["started"])
 
         def sort_key(r):
             try:
@@ -386,6 +436,55 @@ class Store:
             except ValueError:
                 return ((999,), r["key"])
         return sorted(rows, key=sort_key)
+
+    def networks_under(self, node_id: int) -> list[dict]:
+        """Every network at or below a node (a network gives just itself)."""
+        node = self.node(node_id)
+        if not node:
+            return []
+        if node["kind"] == "network":
+            return [node]
+        out, todo = [], [node_id]
+        while todo:
+            pid = todo.pop()
+            for r in self.db.execute("SELECT * FROM nodes WHERE parent_id=? ORDER BY sort, name COLLATE NOCASE", (pid,)):
+                r = dict(r)
+                if r["kind"] == "network":
+                    out.append(r)
+                else:
+                    todo.append(r["id"])
+        return out
+
+    def devices_for_node(self, node_id: int) -> dict:
+        """Roll-up: devices from every network under a site / area (or one network).
+        Networks sharing a subnet show its devices once."""
+        nets = self.networks_under(node_id)
+        by_subnet: dict[str, list[dict]] = {}
+        for n in nets:
+            by_subnet.setdefault(n["subnet"], []).append(n)
+        rows, last = [], None
+        for subnet, ns in by_subnet.items():
+            names = [" › ".join(self.path_names(n["id"])[-2:]) if len(nets) > 1 else n["name"] for n in ns]
+            for r in self.devices(subnet):
+                r["network"] = " / ".join(names)
+                r["network_ids"] = [n["id"] for n in ns]
+                rows.append(r)
+            sc = self.scans(subnet, 1)
+            if sc and (last is None or sc[0]["started"] > last["started"]):
+                last = sc[0]
+        return {"node_id": node_id, "subnets": list(by_subnet), "networks": [{"id": n["id"], "name": n["name"],
+                "path": " › ".join(self.path_names(n["id"])), "subnet": n["subnet"]} for n in nets],
+                "devices": rows, "last_scan": {"ts": last["started"], "kind": last["label"]} if last else None}
+
+    def clear_inactive(self, subnets: list[str]) -> int:
+        n = 0
+        for subnet in subnets:
+            ids = [r["id"] for r in self.devices(subnet) if r["inactive"]]
+            if ids:
+                with self._lock:
+                    n += self.db.execute(f"DELETE FROM devices WHERE id IN ({','.join('?' * len(ids))})", ids).rowcount
+                    self.db.commit()
+        return n
 
     def device_ips(self, subnet: str) -> list[str]:
         return sorted({r["ip"] for r in self.db.execute("SELECT ip FROM devices WHERE subnet=?", (subnet,))},

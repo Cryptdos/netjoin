@@ -129,7 +129,7 @@ class Engine:
         """What the 'Next IP on Join' tile shows: {'ip', 'how'}."""
         mode = network.get("addr_mode") or "range"
         if mode == "fixed":
-            return {"ip": network.get("fixed_ip"), "how": "fixed IP"}
+            return {"ip": network.get("fixed_ip"), "how": "static IP"}
         alloc = network.get("alloc") or "first"
         if alloc == "random":
             return {"ip": None, "how": "random from the range"}
@@ -208,9 +208,9 @@ class Engine:
             fixed = not ip and (network.get("addr_mode") or "range") == "fixed"
             if fixed:
                 fip = network["fixed_ip"]
-                what, msg = (f"Fixed IP {fip} is in use by another device",
-                             f"{fip} is in use by another device – check with site IT. NetJoin doesn't pick "
-                             "another address for a fixed IP.")
+                what, msg = (f"Static IP {fip} is in use by another device",
+                             f"Static IP {fip} is in use by another device. NetJoin doesn't pick "
+                             "another address for a static IP – check the address, or use the allowed range.")
             elif ip:
                 what, msg = f"{ip} is in use by another device", f"{ip} is in use by another device. Try Join to pick a free address."
             else:

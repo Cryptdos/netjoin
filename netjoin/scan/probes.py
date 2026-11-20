@@ -101,6 +101,14 @@ class FakeProber(Prober):
     """Demo data: a few Siemens controllers plus a routed MS/TP device, on whatever subnet you're on."""
     kind = "fake"
 
+    def __init__(self):
+        import os
+        # last octets of devices "unplugged" (tests / demo of inactive devices), e.g. NETJOIN_FAKE_GONE=11,mstp
+        self.gone: set[str] = {x.strip() for x in os.environ.get("NETJOIN_FAKE_GONE", "").split(",") if x.strip()}
+
+    def _here(self, ip: str) -> bool:
+        return ip.rsplit(".", 1)[-1] not in self.gone
+
     def _base(self, ip):
         return ip.rsplit(".", 1)[0]
 
@@ -111,11 +119,11 @@ class FakeProber(Prober):
 
     def arp(self, ip, src_ip):
         time.sleep(0.004)
-        return self._hosts(src_ip).get(ip)
+        return self._hosts(src_ip).get(ip) if self._here(ip) else None
 
     def ping(self, ip, src_ip, timeout_ms=600):
         time.sleep(0.004)
-        return 2.0 if ip in self._hosts(src_ip) and not ip.endswith(".12") else None
+        return 2.0 if ip in self._hosts(src_ip) and not ip.endswith(".12") and self._here(ip) else None
 
     def tcp(self, ip, port, src_ip):
         return (ip.endswith(".10") or ip.endswith(".11")) and port in (80, 443) or (ip.endswith(".1") and port == 443)
@@ -133,7 +141,7 @@ class FakeProber(Prober):
         out.append({"instance": 2601, "vendor_id": 7, "ip": f"{b}.10", "port": 47808, "snet": 2, "sadr": b"\x05",
                     "key": f"{b}.10|2:05", "route": "net 2, MAC 5", "vendor": "Siemens Schweiz AG",
                     "name": "RA L2-03 (MS/TP)", "model": "DXR2.M18-101A"})
-        return out
+        return [d for d in out if self._here(d["ip"]) and not (d["route"] and "mstp" in self.gone)]
 
     def discover_extra(self) -> dict:
         """Demo observations: a BMS subnet with broadcasts + BACnet, and a second subnet with no broadcasts."""

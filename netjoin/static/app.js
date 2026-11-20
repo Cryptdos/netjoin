@@ -198,6 +198,7 @@ function findNode(id, nodes = state.tree) {
 }
 
 async function select(n) {
+  if (state.selected !== n.id) { $("#devVendor").value = ""; $("#devNetwork").value = ""; }
   state.selected = n.id; state.expanded.add(n.id); saveUi(); renderTree();
   await refreshDetail();
 }
@@ -224,7 +225,7 @@ async function refreshDetail() {
       el("div", { class: "row" }, editBtn,
         el("button", { type: "button", class: "btn", onclick: () => openNode({ parent: d, kind: "area" }) }, "+ Area"),
         el("button", { type: "button", class: "btn btn-primary", onclick: () => openNode({ parent: d, kind: "network" }) }, "+ Network"))),
-      el("p", { class: "muted" }, `${d.kind === "site" ? "Site" : "Area"} · pick a network inside it to join.`));
+      el("p", { class: "roll-stats", id: "rollStats" }, `${d.kind === "site" ? "Site" : "Area"} · pick a network inside it to join.`));
     renderHistory(); return;
   }
   const inetPill = d.last_internet == null ? el("span", { class: "pill" }, "Internet: not checked yet")
@@ -242,7 +243,7 @@ async function refreshDetail() {
     el("div", { class: "tiles" },
       tile("Network", netText(d.subnet), netFromCidr(d.subnet) ? `usable ${ip4.str(netFromCidr(d.subnet).first)} – ${ip4.str(netFromCidr(d.subnet).last)}` : null),
       d.addr_mode === "fixed"
-        ? tile("Laptop address", d.fixed_ip || "—", "fixed IP")
+        ? tile("Laptop address", d.fixed_ip || "—", "static IP")
         : tile("Laptop address", `${shortIp(d.range_start, Number(d.subnet.split("/")[1]))} – ${shortIp(d.range_end, Number(d.subnet.split("/")[1]))}`, `${d.range_start} – ${d.range_end} · ${ALLOC_TEXT[d.alloc] || "first free"}`),
       tile("Gateway / DNS", `${r.gateway || "—"} / ${r.dns.length ? r.dns.join(", ") : "—"}`,
         r.gateway_from || r.dns_from ? `from ${[r.gateway_from, r.dns_from].filter(Boolean).join(" · ")}` : "none (default)"),
@@ -300,6 +301,18 @@ async function doJoin(btn, ip) {
 // ---------- scanning ----------
 function renderScanMenu() {
   const d = state.detail; const box = $("#scanOptions"); const menu = $("#scanMenu");
+  menu.hidden = !d;
+  if (d && d.kind !== "network") {          // site / area: scans run per network, so offer a way to get there
+    menu.setAttribute("aria-disabled", "false");
+    $("#scanMenuBtn").textContent = "Scan a network ▾";
+    const nets = (state.devData && state.devData.networks) || [];
+    box.replaceChildren(el("div", { class: "note" }, "Scans run per network, from the laptop's current subnet. Pick one:"),
+      ...(nets.length ? nets.map((n) => el("button", { type: "button", role: "menuitem", onclick: () => { menu.open = false; goTo(n.id); } },
+        el("span", {}, n.path.split(" › ").slice(-2).join(" › ")), el("span", { class: "d mono" }, n.subnet)))
+        : [el("div", { class: "d", style: "padding:8px 10px" }, "No networks here yet.")]));
+    return;
+  }
+  $("#scanMenuBtn").textContent = "Scan ▾";
   const usable = d && d.kind === "network" && d.on_subnet && !state.scan.running;
   menu.setAttribute("aria-disabled", usable ? "false" : "true");
   const kids = [];
@@ -358,12 +371,44 @@ $("#scanCancel").addEventListener("click", () => api("/scan/cancel", { method: "
 
 async function refreshDevices() {
   const d = state.detail; const box = $("#devicesBox");
-  if (!d || d.kind !== "network") { box.replaceChildren(el("div", { class: "empty" }, "Select a network.")); $("#devCount").textContent = ""; $("#clearDevices").hidden = true; $("#lastScan").textContent = ""; return; }
-  let r; try { r = await api(`/devices?subnet=${encodeURIComponent(d.subnet)}`); } catch (e) { return; }
-  if (!state.detail || state.detail.subnet !== r.subnet) return;
-  state.devices = r.devices;
+  if (!d) {
+    state.devData = null;
+    box.replaceChildren(el("div", { class: "empty" }, "Select a site, area or network."));
+    for (const id of ["#devCount", "#lastScan"]) $(id).textContent = "";
+    $("#clearDevices").hidden = $("#clearInactive").hidden = true; return;
+  }
+  let r; try { r = await api(`/devices?node_id=${d.id}`); } catch (e) { return; }
+  if (!state.detail || state.detail.id !== r.node_id) return;      // the user moved on meanwhile
+  state.devData = r; state.devices = r.devices;
+  $("#devTitle").textContent = d.kind === "network" ? "Devices on this network" : `Devices in this ${d.kind}`;
   $("#lastScan").textContent = r.last_scan ? `Last: ${r.last_scan.kind}, ${when(r.last_scan.ts)}` : "";
+  fillDeviceFilters(r);
+  if (d.kind !== "network") { renderScanMenu(); renderRollStats(r); }
   renderDevices();
+}
+
+// Site / area header: "3 networks · 42 devices · 18 BACnet · last scan 09:02"
+function renderRollStats(r) {
+  const box = $("#rollStats"); if (!box) return;
+  const devs = r.devices.filter((x) => !x.is_self);
+  const parts = [`${r.networks.length} network${r.networks.length === 1 ? "" : "s"}`, `${devs.length} device${devs.length === 1 ? "" : "s"}`,
+    `${devs.filter((x) => x.bacnet_instance != null).length} BACnet`];
+  const gone = devs.filter((x) => x.inactive).length; if (gone) parts.push(`${gone} inactive`);
+  if (r.last_scan) parts.push(`last scan ${when(r.last_scan.ts)}`);
+  box.textContent = parts.join(" · ");
+}
+
+function fillDeviceFilters(r) {
+  const vSel = $("#devVendor"), nSel = $("#devNetwork"); const keepV = vSel.value, keepN = nSel.value;
+  const vendors = [...new Set(r.devices.filter((x) => !x.is_self).map(vendorName).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  vSel.replaceChildren(el("option", { value: "" }, "All vendors"), ...vendors.map((v) => el("option", { value: v }, v)));
+  vSel.value = vendors.includes(keepV) ? keepV : "";
+  const rollup = state.detail && state.detail.kind !== "network";
+  nSel.hidden = !rollup || r.networks.length < 2;
+  const nets = [...new Set(r.devices.map((x) => x.network).filter(Boolean))].sort();
+  nSel.replaceChildren(el("option", { value: "" }, "All networks"), ...nets.map((n) => el("option", { value: n }, n)));
+  nSel.value = nets.includes(keepN) ? keepN : "";
+  for (const o of $("#devSort").options) if (o.value === "network") o.hidden = !rollup;
 }
 
 // BACnet vendor-name (from the device itself) wins; otherwise the MAC manufacturer.
@@ -375,28 +420,78 @@ function vendorCell(x) {
   return "—";
 }
 
+const vendorName = (x) => x.vendor || (x.bacnet_vendor_id != null ? `Vendor ID ${x.bacnet_vendor_id}` : null) || x.mac_vendor || "";
+const hasWeb = (x) => (x.ports || "").split(",").some((p) => ["80", "443", "8080"].includes(p));
+const ipKey = (ip) => String(ip).split(".").reduce((a, o) => a * 256 + (+o || 0), 0);
+const DEV_FILTERS = {
+  all: () => true, bacnet: (x) => x.bacnet_instance != null, other: (x) => x.bacnet_instance == null,
+  web: hasWeb, missing: (x) => x.inactive, new: (x) => x.new,
+};
+// Sort keys: the first value decides; null = blank, always sorted last whichever direction.
+const DEV_SORTS = {
+  ip: (x) => [ipKey(x.ip), x.key], name: (x) => [(x.name || "").toLowerCase() || null, ipKey(x.ip)],
+  vendor: (x) => [vendorName(x).toLowerCase() || null, ipKey(x.ip)], bacnet: (x) => [x.bacnet_instance ?? null, ipKey(x.ip)],
+  mac: (x) => [x.mac || null, ipKey(x.ip)], ports: (x) => [(x.ports || "").split(",").filter(Boolean).length || null, ipKey(x.ip)],
+  seen: (x) => [x.last_seen || null, ipKey(x.ip)], network: (x) => [x.network || null, ipKey(x.ip)],
+};
+state.sort = { key: "ip", dir: 1 };
+const portLabel = { 80: "HTTP", 443: "HTTPS", 8080: "HTTP-alt", 502: "Modbus", 1911: "Fox", 4911: "Fox TLS", 22: "SSH", 23: "Telnet" };
+
+function visibleDevices() {
+  const q = $("#devSearch").value.trim().toLowerCase(); const v = $("#devVendor").value; const n = $("#devNetwork").value;
+  const f = DEV_FILTERS[state.filter] || DEV_FILTERS.all;
+  const rows = (state.devices || []).filter((x) => f(x) && (!v || vendorName(x) === v) && (!n || x.network === n) && (!q ||
+    [x.ip, x.mac, x.vendor, x.mac_vendor, x.name, x.model, x.route, x.network, x.bacnet_instance != null ? `#${x.bacnet_instance} ${x.bacnet_instance}` : ""]
+      .some((t) => t && String(t).toLowerCase().includes(q))));
+  const key = DEV_SORTS[state.sort.key] || DEV_SORTS.ip; const dir = state.sort.dir;
+  const cmp = (a, b) => { const ka = key(a), kb = key(b);
+    if ((ka[0] == null) !== (kb[0] == null)) return ka[0] == null ? 1 : -1;      // blanks last
+    for (let i = 0; i < ka.length; i++) { if (ka[i] < kb[i]) return -dir; if (ka[i] > kb[i]) return dir; } return 0; };
+  // "This PC" stays at the top whatever the sort
+  return rows.sort((a, b) => (b.is_self - a.is_self) || cmp(a, b));
+}
+
+function goneText(ts) {
+  if (!ts) return "Not seen in the latest scan";
+  const d = new Date(ts); const days = Math.floor((Date.now() - d.getTime()) / 86400000);
+  if (d.toDateString() === new Date().toDateString()) return `Not seen since ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  return days >= 1 ? `Not seen for ${days} day${days === 1 ? "" : "s"}` : `Not seen since ${when(ts)}`;
+}
+
 function renderDevices() {
   const d = state.detail; const box = $("#devicesBox");
-  const all = state.devices;
-  const rows = all.filter((x) => state.filter === "all" || (state.filter === "bacnet" ? x.bacnet_instance != null : x.bacnet_instance == null));
+  const all = state.devices || [];
+  const rollup = d && d.kind !== "network";
+  const rows = visibleDevices();
+  // chip counts
+  for (const c of document.querySelectorAll(".chip")) {
+    const k = c.dataset.filter; const n = all.filter((x) => !x.is_self && DEV_FILTERS[k](x)).length;
+    c.replaceChildren(c.dataset.label || (c.dataset.label = c.textContent), k === "all" || !n ? "" : el("span", { class: "n" }, String(n)));
+    if (k === "missing" || k === "new") c.hidden = n === 0 && state.filter !== k;
+  }
+  const inactive = all.filter((x) => x.inactive).length;
   $("#clearDevices").hidden = all.length === 0;
-  const others = all.filter((x) => x.sources !== "self").length;
-  $("#devCount").textContent = all.length ? `${others} device(s)${rows.length !== all.length ? `, ${rows.length} shown` : ""}` : "";
+  $("#clearInactive").hidden = inactive === 0;
+  $("#clearInactive").textContent = `Clear inactive (${inactive})`;
+  const others = all.filter((x) => !x.is_self).length;
+  $("#devCount").textContent = all.length ? `${others} device(s)${rows.filter((x) => !x.is_self).length !== others ? `, ${rows.filter((x) => !x.is_self).length} shown` : ""}` : "";
   if (!all.length) {
-    box.replaceChildren(el("div", { class: "empty" }, d.on_subnet ? "No scan results yet – use Scan to find hosts and controllers." : "No scan results yet. Join this network, then Scan."));
+    box.replaceChildren(el("div", { class: "empty" }, rollup ? "No scan results in this " + d.kind + " yet – open one of its networks, Join and Scan."
+      : d.on_subnet ? "No scan results yet – use Scan to find hosts and controllers." : "No scan results yet. Join this network, then Scan."));
     return;
   }
-  const portLabel = { 80: "HTTP", 443: "HTTPS", 8080: "HTTP-alt", 502: "Modbus", 1911: "Fox", 4911: "Fox TLS", 22: "SSH", 23: "Telnet" };
   const webUrl = (ip, p) => p === 443 ? `https://${ip}/` : p === 8080 ? `http://${ip}:8080/` : `http://${ip}/`;
   const tr = (x) => {
-    const self = x.sources === "self" || (x.sources || "").split(",").includes("self");
     const ports = (x.ports || "").split(",").filter(Boolean).map(Number);
-    const seen = [(x.sources || "").split(",").filter((s) => s && s !== "self").join(" · ") || "—",
-      el("span", { class: "sub2" }, [x.ping_ms != null ? `${x.ping_ms} ms` : null, when(x.last_seen)].filter(Boolean).join(" · "))];
-    return el("tr", { class: self ? "self" : null },
-      el("td", { class: "mono ipcell", "data-label": "IP" }, x.ip),
+    const seen = x.inactive
+      ? [el("span", { class: "gone" }, goneText(x.last_seen)), el("span", { class: "sub2" }, (x.sources || "").split(",").filter((s) => s && s !== "self").join(" · "))]
+      : [(x.sources || "").split(",").filter((s) => s && s !== "self").join(" · ") || "—",
+        el("span", { class: "sub2" }, [x.ping_ms != null ? `${x.ping_ms} ms` : null, when(x.last_seen)].filter(Boolean).join(" · "))];
+    return el("tr", { class: [x.is_self ? "self" : "", x.inactive ? "inactive" : ""].join(" ").trim() || null,
+        title: x.inactive ? goneText(x.last_seen) : null },
+      el("td", { class: "mono ipcell", "data-label": "IP" }, x.ip, x.new ? el("span", { class: "badge-new" }, "NEW") : null),
       el("td", { class: "mono", "data-label": "MAC" }, x.mac || "—"),
-      el("td", { "data-label": "Vendor" }, self ? [el("strong", {}, "This PC"), x.name ? el("span", { class: "sub2" }, x.name) : null] : vendorCell(x)),
+      el("td", { "data-label": "Vendor" }, x.is_self ? [el("strong", {}, "This PC"), x.name ? el("span", { class: "sub2" }, x.name) : null] : vendorCell(x)),
       el("td", { "data-label": "BACnet" }, x.bacnet_instance != null ? [
         el("span", { class: "mono" }, `#${x.bacnet_instance}`), x.name ? ` · ${x.name}` : "",
         x.model ? el("span", { class: "sub2" }, x.model) : null,
@@ -404,11 +499,20 @@ function renderDevices() {
       el("td", { "data-label": "Ports" }, ports.length ? ports.map((p) => [80, 443, 8080].includes(p)
         ? el("a", { class: "port", href: webUrl(x.ip, p), target: "_blank", rel: "noopener noreferrer" }, portLabel[p] || p)
         : el("span", { class: "port" }, portLabel[p] || p)) : "—"),
-      el("td", { class: "small", "data-label": "Seen by" }, seen));
+      el("td", { class: "small", "data-label": "Seen by" }, seen),
+      rollup ? el("td", { class: "small", "data-label": "Network" }, x.network || "—") : null);
   };
-  box.replaceChildren(el("table", { class: "dev" },
-    el("thead", {}, el("tr", {}, ["IP", "MAC", "Vendor", "BACnet device", "Open ports", "Seen by"].map((h) => el("th", {}, h)))),
-    el("tbody", {}, rows.map(tr))));
+  const cols = [["IP", "ip"], ["MAC", "mac"], ["Vendor", "vendor"], ["BACnet device", "bacnet"], ["Open ports", "ports"], ["Seen by", "seen"]];
+  if (rollup) cols.push(["Network", "network"]);
+  const th = ([label, key]) => el("th", { "aria-sort": state.sort.key === key ? (state.sort.dir > 0 ? "ascending" : "descending") : null },
+    el("button", { type: "button", title: `Sort by ${label}`, onclick: () => setSort(key) }, label));
+  box.replaceChildren(rows.length ? el("table", { class: "dev" }, el("thead", {}, el("tr", {}, cols.map(th))), el("tbody", {}, rows.map(tr)))
+    : el("div", { class: "empty" }, "No devices match the search / filters."));
+}
+
+function setSort(key) {
+  state.sort = state.sort.key === key ? { key, dir: -state.sort.dir } : { key, dir: key === "seen" || key === "ports" ? -1 : 1 };
+  $("#devSort").value = key; renderDevices();
 }
 
 for (const c of document.querySelectorAll(".chip")) c.addEventListener("click", () => {
@@ -416,9 +520,39 @@ for (const c of document.querySelectorAll(".chip")) c.addEventListener("click", 
   for (const o of document.querySelectorAll(".chip")) { o.classList.toggle("on", o === c); o.setAttribute("aria-pressed", String(o === c)); }
   renderDevices();
 });
+$("#devSearch").addEventListener("input", renderDevices);
+$("#devVendor").addEventListener("change", renderDevices);
+$("#devNetwork").addEventListener("change", renderDevices);
+$("#devSort").addEventListener("change", (e) => { state.sort = { key: e.target.value, dir: 1 }; renderDevices(); });
+
 $("#clearDevices").addEventListener("click", async () => {
-  const d = state.detail; if (!d || !confirm(`Clear the device list for ${d.subnet}?`)) return;
-  await api(`/devices?subnet=${encodeURIComponent(d.subnet)}`, { method: "DELETE" }); refreshDevices(); refreshLog();
+  const d = state.detail; if (!d) return;
+  const what = d.kind === "network" ? `for ${d.subnet}` : `for every network in ${d.name}`;
+  if (!confirm(`Clear the whole device list ${what}?`)) return;
+  await api(`/devices?node_id=${d.id}`, { method: "DELETE" }); refreshDevices(); refreshLog();
+});
+$("#clearInactive").addEventListener("click", async () => {
+  const d = state.detail; if (!d) return;
+  const gone = (state.devices || []).filter((x) => x.inactive);
+  const oldest = gone.map((x) => x.last_seen).sort()[0];
+  if (!confirm(`Remove ${gone.length} inactive device${gone.length === 1 ? "" : "s"} (${goneText(oldest).toLowerCase()})?`)) return;
+  const r = await api(`/devices?node_id=${d.id}&inactive=1`, { method: "DELETE" });
+  flash(`Removed ${r.cleared} inactive device(s)`); refreshDevices(); refreshLog();
+});
+
+// CSV of exactly what's shown (search, filters and sort applied).
+$("#devCsv").addEventListener("click", () => {
+  const d = state.detail; if (!d) return;
+  const rows = visibleDevices();
+  const head = ["Network", "IP", "MAC", "Vendor", "NIC maker", "BACnet instance", "Name", "Model", "Behind router", "Open ports", "Seen by", "Last seen", "Status"];
+  const esc = (v) => { const t = v == null ? "" : String(v); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+  const lines = [head.join(",")].concat(rows.map((x) => [x.network || d.name, x.ip, x.mac, x.is_self ? "This PC" : x.vendor || "", x.mac_vendor,
+    x.bacnet_instance, x.name, x.model, x.route, (x.ports || "").split(",").filter(Boolean).map((p) => portLabel[p] || p).join(" "),
+    (x.sources || "").split(",").filter((s) => s && s !== "self").join(" "), x.last_seen, x.inactive ? "inactive" : x.new ? "new" : "active"].map(esc).join(",")));
+  const blob = new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = el("a", { href: URL.createObjectURL(blob), download: `NetJoin-devices-${d.name.replace(/[^\w.-]+/g, "_")}-${new Date().toISOString().slice(0, 10)}.csv` });
+  document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+  flash(`Exported ${rows.length} device(s) to CSV`);
 });
 
 // ---------- discover ----------
@@ -654,7 +788,7 @@ function netChanged() {
   const pv = $("#netPreview");
   const nw = currentNet();
   if (!f.net_ip.value.trim()) {
-    pv.className = "small preview"; pv.textContent = "Type any IP on the network (e.g. from the drawings) and pick the mask. Pasting 10.20.5.0/24 works too.";
+    pv.className = "small preview"; pv.textContent = "Type any address on the network and pick the mask. Pasting 10.20.5.0/24 works too.";
   } else if (!nw) {
     pv.className = "small preview bad"; pv.textContent = "That isn't an IPv4 address.";
   } else {
@@ -728,7 +862,7 @@ $("#nodeForm").addEventListener("submit", async (e) => {
     dns_override: f.dns_override.checked, dns: f.dns.value.trim(), notes: f.notes.value };
   if (f.kind.value === "network") {
     const nw = currentNet();
-    if (!nw) { $("#nodeErr").textContent = "Enter an IP on the network and pick the mask."; return; }
+    if (!nw) { $("#nodeErr").textContent = "Enter the IP Network and pick the mask."; return; }
     Object.assign(body, { subnet: `${ip4.str(nw.net)}/${nw.prefix}`, range_start: f.range_start.value.trim(), range_end: f.range_end.value.trim(),
       addr_mode: [...f.addr_mode].find((r) => r.checked)?.value || "range", fixed_ip: f.fixed_ip.value.trim(), alloc: f.alloc.value });
   }
@@ -759,7 +893,7 @@ $("#dnsFromGw").addEventListener("click", () => {
 });
 $("#suggestGw").addEventListener("click", () => {
   const f = $("#nodeForm"); const nw = currentNet();
-  if (!nw) { $("#nodeErr").textContent = "Enter the network's IP and mask first."; return; }
+  if (!nw) { $("#nodeErr").textContent = "Enter the IP Network and mask first."; return; }
   f.gateway.value = ip4.str(nw.first);      // network + 1, e.g. 192.168.0.1 on a /22
 });
 

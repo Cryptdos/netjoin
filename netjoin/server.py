@@ -186,16 +186,40 @@ def discover_status(req, data):
             "demo": eng().backend.kind == "fake"}
 
 
+def _current_ips() -> set[str]:
+    try:
+        a = eng().adapter()
+        return {x.ip for x in a.addresses}
+    except Exception:
+        return set()
+
+
 def devices(req, data):
-    subnet = req.query_params.get("subnet", "")
-    rows = eng().store.devices(subnet)
-    return {"subnet": subnet, "devices": rows, "last_scan": eng().store.get_setting(f"lastscan:{subnet}")}
+    st = eng().store
+    nid = req.query_params.get("node_id")
+    if nid:
+        r = st.devices_for_node(int(nid))
+        mine = _current_ips()
+        # "This PC" only at the laptop's current address; rows from earlier visits to other networks are dropped
+        r["devices"] = [d for d in r["devices"] if not d["is_self"] or d["ip"] in mine]
+        return r
+    subnet = req.query_params.get("subnet", "")            # 0.5 style, still used by older pages
+    rows = st.devices(subnet)
+    sc = st.scans(subnet, 1)
+    return {"subnet": subnet, "devices": rows,
+            "last_scan": {"ts": sc[0]["started"], "kind": sc[0]["label"]} if sc else st.get_setting(f"lastscan:{subnet}")}
 
 
 def clear_devices(req, data):
-    subnet = req.query_params.get("subnet", "")
-    n = eng().store.clear_devices(subnet)
-    eng().log.add(f"Cleared {n} device(s) for {subnet}")
+    st = eng().store
+    nid = req.query_params.get("node_id")
+    subnets = st.devices_for_node(int(nid))["subnets"] if nid else [req.query_params.get("subnet", "")]
+    if req.query_params.get("inactive") == "1":
+        n = st.clear_inactive(subnets)
+        eng().log.add(f"Cleared {n} inactive device(s)")
+    else:
+        n = sum(st.clear_devices(sn) for sn in subnets)
+        eng().log.add(f"Cleared {n} device(s) for {', '.join(subnets)}")
     return {"cleared": n}
 
 

@@ -286,3 +286,21 @@ body.nav-collapsed .sidebar{display:none}
 .hist-pop .hist button{flex-direction:row;align-items:center;gap:10px;border:1px solid var(--line2);border-radius:6px;padding:8px 10px}
 .hist-pop .hist li{list-style:none}
 #navToggle{flex:none}
+
+/* ---------- v0.6 devices ---------- */
+.dev-tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+#devSearch{flex:1 1 220px;min-width:160px;height:32px}
+.dev-tools select{height:32px;max-width:200px}
+.chip .n{margin-left:4px;opacity:.7;font-size:11px}
+table.dev th button{border:0;background:none;padding:0;font:inherit;color:inherit;cursor:pointer;display:inline-flex;gap:4px;align-items:center}
+table.dev th button:hover{color:var(--text)}
+table.dev th[aria-sort] button::after{content:"▲";font-size:9px}
+table.dev th[aria-sort="descending"] button::after{content:"▼"}
+table.dev tr.inactive td{color:#8A9099}
+table.dev tr.inactive td.mono{text-decoration:line-through;text-decoration-color:#C4C9D0}
+table.dev tr.inactive .port{opacity:.5}
+.badge-new{display:inline-block;margin-left:6px;padding:0 6px;border-radius:999px;background:var(--accent-bg);color:var(--accent-d);font:600 10px "Segoe UI",Inter,sans-serif;vertical-align:middle}
+.gone{color:var(--warn);font-weight:600}
+.sort-narrow{display:none}
+.roll-stats{margin:10px 0 0;color:var(--muted)}
+@container (max-width: 620px){ .sort-narrow{display:inline-block} }

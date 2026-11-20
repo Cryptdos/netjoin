@@ -167,6 +167,9 @@ class ScanManager:
         self.log.add(f"{KINDS[kind]['label']} on {subnet} from {adapter} ({src_ip})")
         count = lambda: sum(1 for d in self.store.devices(subnet) if d["key"] != src_ip)  # noqa: E731
         before = count()
+        from ..store import now as utc_now
+        started = utc_now()
+        self._methods = []
         try:
             try:
                 my_mac = self.engine.adapter(adapter).mac or None
@@ -181,6 +184,8 @@ class ScanManager:
                 getattr(self, f"_step_{step}")(adapter, src_ip, net)
             if not self._cancel.is_set():
                 self._enrich(src_ip, net)
+                # only complete scans count when deciding which devices are inactive
+                self.store.record_scan(subnet, started, KINDS[kind]["label"], self._methods)
             self.store.set_setting(f"lastscan:{subnet}", {"ts": datetime.now().isoformat(timespec="seconds"),
                                                           "kind": KINDS[kind]["label"]})
             found = count()
@@ -212,8 +217,7 @@ class ScanManager:
             if d["mac"] and not d["mac_vendor"]:
                 v = oui.lookup(d["mac"])
                 if v:
-                    self.store.upsert_device(subnet, d["key"], d["ip"], d["sources"].split(",")[0] or "arp",
-                                             mac_vendor=v)
+                    self.store.set_device_fields(subnet, d["key"], mac_vendor=v)
                     named += 1
         if got or named:
             self.log.add(f"Filled in {got} MAC address(es) and {named} manufacturer(s)"
@@ -244,6 +248,7 @@ class ScanManager:
                     yield futures[f], r
 
     def _step_arp(self, adapter, src_ip, net):
+        self._methods.append("arp")
         subnet = str(net)
         np = npcap.status() if self.prober.kind == "windows" else {"available": False}
         if np["available"]:
@@ -266,6 +271,7 @@ class ScanManager:
         self.log.add(f"ARP sweep: {n} host(s) answered")
 
     def _step_ping(self, adapter, src_ip, net):
+        self._methods.append("ping")
         subnet = str(net)
         n = 0
         for ip, ms in self._sweep("Ping sweep", self._hosts(src_ip, net), lambda ip: self.prober.ping(ip, src_ip)):
@@ -275,6 +281,7 @@ class ScanManager:
         self.log.add(f"Ping sweep: {n} host(s) replied")
 
     def _step_bacnet(self, adapter, src_ip, net):
+        self._methods.append("bacnet")
         subnet = str(net)
         self._set(phase="BACnet Who-Is (listening 3 s, then reading names)", done=0, total=1)
         devs = self.prober.who_is(src_ip, net.prefixlen, self._cancel.is_set, self.log.add)
@@ -288,6 +295,7 @@ class ScanManager:
                      f"{f' ({routed} behind routers)' if routed else ''}")
 
     def _step_ports(self, adapter, src_ip, net):
+        self._methods.append("ports")
         subnet = str(net)
         hosts = [ip for ip in self.store.device_ips(subnet) if ip != src_ip]
         if not hosts:
@@ -299,11 +307,15 @@ class ScanManager:
         for (ip, port), ok in self._sweep("BMS port check", jobs, lambda j: self.prober.tcp(j[0], j[1], src_ip)):
             open_by_ip[ip].add(port)
         for ip, ports in open_by_ip.items():
-            self.store.upsert_device(subnet, ip, ip, "ports", ports=ports)
+            if ports:      # answered on a port: it's there
+                self.store.upsert_device(subnet, ip, ip, "ports", ports=ports)
+            else:          # no open BMS ports isn't proof it's gone; just clear the old list
+                self.store.set_device_fields(subnet, ip, ports=None)
         n = sum(1 for p in open_by_ip.values() if p)
         self.log.add(f"Port check: {n} of {len(hosts)} host(s) have BMS ports open")
 
     def _step_passive(self, adapter, src_ip, net):
+        self._methods.append("passive")
         subnet = str(net)
         secs = 30
         self._set(phase=f"Passive listen ({secs} s, sending nothing)", done=0, total=secs)

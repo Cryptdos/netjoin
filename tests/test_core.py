@@ -139,12 +139,14 @@ class StoreAndJoin(unittest.TestCase):
         c = self.engine.candidates(n())
         self.assertEqual(sorted(c, key=lambda x: int(x.split(".")[-1])), [f"10.20.5.{i}" for i in range(200, 255)])
         self.assertEqual(self.engine.next_ip(n())["how"], "random from the range")
+        self.store.update_node(nid, {"addr_mode": "fixed", "fixed_ip": "39"})
+        self.assertEqual(self.engine.next_ip(n()), {"ip": "10.20.5.39", "how": "static IP"})
         with self.assertRaises(StoreError):
             self.store.update_node(nid, {"alloc": "sideways"})
 
     def test_fixed_ip(self):
         nid = self.net["id"]
-        with self.assertRaisesRegex(StoreError, "Enter the fixed IP"):
+        with self.assertRaisesRegex(StoreError, "Enter the static IP"):
             self.store.update_node(nid, {"addr_mode": "fixed"})
         with self.assertRaisesRegex(StoreError, "isn't a usable address"):
             self.store.update_node(nid, {"addr_mode": "fixed", "fixed_ip": "10.20.6.39"})
@@ -152,7 +154,7 @@ class StoreAndJoin(unittest.TestCase):
         self.assertEqual(self.store.node(nid)["fixed_ip"], "10.20.5.39")
         self.assertEqual(self.engine.join(nid)["ip"], "10.20.5.39")
         self.store.update_node(nid, {"fixed_ip": ".230"})                                   # "taken" in the fake
-        with self.assertRaisesRegex(JoinError, "check with site IT"):
+        with self.assertRaisesRegex(JoinError, "Static IP 10.20.5.230 is in use"):
             self.engine.join(nid)
 
     def test_shorthand_and_subnet_entry(self):
@@ -235,6 +237,51 @@ class StoreAndJoin(unittest.TestCase):
             time.sleep(0.05)
         selfs = [d["ip"] for d in self.store.devices("10.20.5.0/24") if "self" in (d["sources"] or "")]
         self.assertEqual(selfs, ["10.20.5.240"])
+
+    def _scan(self, scans, kind):
+        import time
+        scans.start(kind, self.net["id"])
+        for _ in range(200):
+            if not scans.status()["running"]:
+                return
+            time.sleep(0.03)
+
+    def test_inactive_devices(self):
+        from netjoin.scan import ScanManager
+        from netjoin.scan.probes import FakeProber
+        prober = FakeProber()
+        scans = ScanManager(self.engine, prober)
+        self.engine.join(self.net["id"])
+        self._scan(scans, "full")
+        sub = "10.20.5.0/24"
+        self.assertFalse(any(d["inactive"] for d in self.store.devices(sub)))
+        prober.gone = {"11"}                                   # RA L2-01 unplugged
+        self._scan(scans, "ping")                              # ping-only scan
+        by = {d["key"]: d for d in self.store.devices(sub)}
+        self.assertTrue(by["10.20.5.11"]["inactive"])          # was found by ping before, missed now
+        self.assertFalse(by["10.20.5.12"]["inactive"])         # .12 never answered ping: not judged by a ping scan
+        self.assertFalse(by["10.20.5.10|2:05"]["inactive"])    # MS/TP device only ever seen by BACnet
+        self.assertFalse(any(d["inactive"] for d in by.values() if d["is_self"]))
+        self._scan(scans, "bacnet")
+        self.assertTrue({d["key"]: d for d in self.store.devices(sub)}["10.20.5.11"]["inactive"])
+        self.assertEqual(self.store.clear_inactive([sub]), 1)
+        self.assertNotIn("10.20.5.11", {d["key"] for d in self.store.devices(sub)})
+        prober.gone = set()                                    # plugged back in: it reappears as new
+        self._scan(scans, "quick")
+        d11 = {d["key"]: d for d in self.store.devices(sub)}["10.20.5.11"]
+        self.assertEqual((d11["inactive"], d11["new"]), (False, True))
+
+    def test_rollup_by_node(self):
+        other = self.store.create_node("network", self.area["id"], {"name": "AHU", "subnet": "10.20.6.0/24"})
+        twin = self.store.create_node("network", self.area["id"], {"name": "FCU twin", "subnet": "10.20.5.0/24"})
+        self.store.upsert_device("10.20.5.0/24", "10.20.5.10", "10.20.5.10", "arp")
+        self.store.upsert_device("10.20.6.0/24", "10.20.6.10", "10.20.6.10", "arp")
+        r = self.store.devices_for_node(self.area["id"])
+        self.assertEqual(sorted(r["subnets"]), ["10.20.5.0/24", "10.20.6.0/24"])
+        self.assertEqual(len(r["devices"]), 2)                                       # shared subnet listed once
+        self.assertIn("FCU twin", [x for x in r["devices"] if x["ip"] == "10.20.5.10"][0]["network"])
+        self.assertEqual(len(self.store.devices_for_node(other["id"])["devices"]), 1)
+        self.assertEqual({n["id"] for n in self.store.networks_under(self.area["id"])}, {self.net["id"], other["id"], twin["id"]})
 
     def test_export_import_roundtrip(self):
         payload = self.store.export()
