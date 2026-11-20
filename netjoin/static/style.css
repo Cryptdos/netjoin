@@ -400,7 +400,7 @@ body.at-home .lower{display:none}
 .tb-dhcp .short{display:none}
 .join-btn{min-width:96px}
 .join-btn.joined{color:var(--accent-d);border-color:var(--accent-line);background:var(--accent-bg)}
-.join-btn.joined svg{color:#2E9E5B}
+.join-btn.joined svg{flex:none}
 .topbar .btn.icon{flex:none}
 .demo-badge{font:600 10px/1 var(--mono);letter-spacing:.06em;padding:3px 6px;border-radius:4px;background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-line)}
 .demo-badge[hidden]{display:none}

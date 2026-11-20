@@ -318,7 +318,7 @@ async function refreshDetail() {
   const here = !!(st0.joined && st0.joined.network_id === d.id);
   const joinBtn = el("button", { type: "button", class: here ? "btn join-btn joined" : "btn btn-primary join-btn",
     title: here ? `On ${d.name} as ${st0.joined.ip}/${st0.joined.prefix}. Rejoin picks the Join IP again.` : `Set ${st0.adapter ? st0.adapter.name : "the adapter"} to an address on ${d.name}`,
-    onclick: (e) => doJoin(e.currentTarget) }, here ? [checkIcon(), "Rejoin"] : "Join");
+    onclick: (e) => doJoin(e.currentTarget) }, here ? [refreshIcon(), "Rejoin"] : "Join");
   const r = d.resolved;
   // Compact facts for the strip under the bar; the longer detail is in each one's tooltip.
   const tile = (k, v, from, tip) => el("div", { class: "tile", title: tip || null }, el("span", { class: "k" }, k), el("span", { class: "v" }, v), from ? el("span", { class: "from" }, from) : null);
@@ -415,12 +415,6 @@ function crumbBar(d) {
     }
   });
   return nav;
-}
-function checkIcon() {
-  const ns = "http://www.w3.org/2000/svg"; const sv = document.createElementNS(ns, "svg");
-  for (const [k, v] of Object.entries({ width: 15, height: 15, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2.6, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) sv.setAttribute(k, v);
-  sv.innerHTML = '<path d="M5 12.5l4.5 4.5L19 7.5"/>';
-  return sv;
 }
 function refreshIcon() {
   const ns = "http://www.w3.org/2000/svg"; const sv = document.createElementNS(ns, "svg");
