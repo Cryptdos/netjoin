@@ -4,6 +4,8 @@ _Last updated: 2026-11-19_
 
 App name: **NetJoin**. Target: Windows 10+, engineers have local admin.
 
+**Next:** [v0.6 plan – engineering changes and decisions](v0.6-plan.md) (draft for review).
+
 **Build phases:** 1 – tree, Join + clash check, DHCP / rejoin, history, internet check, gateway / DNS overrides, SQLite *(built, v0.1.0 – tested on Windows 2026-11-19: Join, clash detection via DAD, gateway override, Revert to DHCP all working)* · 2 – scans (ARP, ping, BACnet Who-Is, port check, Npcap detection) *(built, v0.2.1 – tested on Windows)* · 3 – Discover wizard, exe packaging polish *(built, v0.3.0 – Discover tested on Windows 2026-11-19)* · 4 – responsive layout for narrow windows (split-screen tabs, small browser windows) *(built, v0.4.0)*.
 
 ## Concept
