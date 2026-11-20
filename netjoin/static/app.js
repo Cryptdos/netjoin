@@ -270,7 +270,8 @@ async function handleLive(live) {
 // ---------- page head: crumbs, title and page buttons live in the top bar ----------
 function setHead(crumbs, title, actions) {
   $("#tbCrumbs").replaceChildren(crumbs);       // the last crumb is the page title
-  $("#tbActions").replaceChildren(...actions.filter(Boolean));
+  // Revert to DHCP lives at the end of the page buttons (same element every time, so its handler stays)
+  $("#tbActions").replaceChildren(...actions.filter(Boolean), $("#dhcpBtn"));
   document.title = title === "Home" ? "NetJoin" : `${title} – NetJoin`;
   fitCrumbs();
 }
