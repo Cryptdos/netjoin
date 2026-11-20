@@ -117,23 +117,31 @@ async function refreshStatus() {
   if (s.adapter_renamed) { flash(s.adapter_renamed); refreshAdapters(); }
   const wasMissing = refreshStatus.missing; refreshStatus.missing = !!s.adapter_missing;
   if (wasMissing !== undefined && wasMissing !== refreshStatus.missing) refreshAdapters();   // unplugged / back
-  $("#ver").textContent = s.backend === "fake" ? "DEMO MODE – no real changes" : "";
+  $("#ver").hidden = s.backend !== "fake";
+  // Connection chip: [● adapter ▾] ip/prefix · DHCP|Static · network  🌐 internet
   const cur = $("#current"); cur.replaceChildren();
-  if (s.adapter_missing) { cur.append(el("span", { class: "inet warn" }, `${s.adapter_missing.name || "Adapter"} unplugged – plug it back in`)); }
-  else if (!s.adapter) { cur.append(el("span", { class: "muted" }, "No adapter selected")); }
+  const a = s.adapter; const p = s.primary;
+  $("#connName").textContent = s.adapter_missing ? `${s.adapter_missing.name || "Adapter"} – unplugged` : a ? a.name : "Pick an adapter";
+  const dot = $("#connDot"); dot.className = "dot " + (s.adapter_missing ? "warn" : !a ? "off" : a.up === false ? "off" : "up");
+  dot.title = s.adapter_missing ? "Unplugged" : !a ? "No adapter" : a.up === false ? "Cable / link down" : "Link up";
+  if (s.adapter_missing) cur.append(el("span", { class: "inet warn" }, "plug it back in"));
+  else if (!a) cur.append(el("span", { class: "muted" }, "none selected"));
   else {
-    const p = s.primary;
-    cur.append(el("span", { class: "small muted" }, "Current"),
-      el("span", { class: "mono" }, p ? `${p.ip}/${p.prefix}` : "no IPv4"),
-      el("span", { class: "small muted cur-mode", title: (s.adapter.dhcp ? "DHCP" : "Static") + (s.joined ? ` · ${s.joined.path || s.joined.network}` : "") },
-        s.adapter.dhcp ? "DHCP" : "Static", ...(s.joined ? [" · ", joinedLink(s.joined)] : [])));
+    cur.append(el("span", { class: "mono" }, p ? `${p.ip}/${p.prefix}` : "no IPv4"),
+      el("span", { class: "small muted cur-mode", title: (a.dhcp ? "DHCP" : "Static") + (s.joined ? ` · ${s.joined.path || s.joined.network}` : "") },
+        a.dhcp ? "DHCP" : "Static", ...(s.joined ? [" · ", joinedLink(s.joined)] : [])));
     if (s.internet !== null && s.internet !== undefined) {
       const i = inetInfo(s.internet);
-      cur.append(el("span", { class: "inet" + i.cls, title: s.internet === 2 ? "Reaches the internet by IP, but no DNS server answers, so web pages won't load. Set DNS on the network (Edit → Override DNS)." : null }, globe(i.off), i.text));
+      cur.append(el("span", { class: "inet" + i.cls, title: s.internet === 2 ? "Reaches the internet by IP, but no DNS server answers, so web pages won't load. Set DNS on the network (Edit → Override DNS)." : i.text }, globe(i.off), el("span", { class: "inet-t" }, i.text)));
     }
-    cur.append(el("button", { type: "button", class: "btn small", onclick: (e) => withBusy(e.currentTarget, async () => {
-      const r = await api("/internet", { method: "POST" }); if (r.internet === 2) flash(r.detail, "warn"); await refreshStatus(); }) }, "Check internet"));
   }
+  const kv = (k, v) => [el("dt", {}, k), el("dd", {}, v)];
+  $("#connInfo").replaceChildren(
+    ...kv("Device", a ? (a.description || a.name) : "—"), ...kv("MAC", a && a.mac ? a.mac : "—"),
+    ...kv("Address", a && p ? `${p.ip}/${p.prefix} · ${a.dhcp ? "DHCP" : "Static"}` : "—"),
+    ...kv("Internet", s.internet == null ? "not checked" : inetInfo(s.internet).text),
+    ...(s.backend === "fake" ? kv("Mode", "Demo – nothing on this PC is changed") : []));
+  $("#checkInetBtn").disabled = !a;
   // Revert to DHCP only makes sense when the adapter isn't already on DHCP.
   const dh = $("#dhcpBtn");
   if (!dh.classList.contains("busy")) {
@@ -142,7 +150,7 @@ async function refreshStatus() {
     dh.title = !s.adapter ? "Pick an adapter first" : already ? `${s.adapter.name} is already on DHCP` : `Set ${s.adapter.name} back to DHCP`;
   }
   const rj = $("#rejoinBtn");
-  if (s.last_network && !s.joined) { rj.hidden = false; rj.textContent = `Rejoin ${s.last_network.network}`; }
+  if (s.last_network && !s.joined) { rj.hidden = false; rj.textContent = `Rejoin ${s.last_network.network}`; rj.title = s.last_network.path || ""; }
   else rj.hidden = true;
   if (!s.admin && !refreshStatus.adminWarned) {
     refreshStatus.adminWarned = true;
@@ -213,6 +221,14 @@ function joinedLink(j) {
   return el("button", { type: "button", class: "netlink", title: `Open ${j.path || j.network}`, onclick: () => goTo(j.network_id) }, j.network);
 }
 
+// ---------- page head: crumbs, title and page buttons live in the top bar ----------
+function setHead(crumbs, title, actions) {
+  $("#tbCrumbs").replaceChildren(crumbs);
+  $("#tbTitle").replaceChildren(el("h1", { title }, title));
+  $("#tbActions").replaceChildren(...actions.filter(Boolean));
+  document.title = title === "Home" ? "NetJoin" : `${title} – NetJoin`;
+}
+
 // ---------- detail ----------
 async function refreshDetail() {
   const box = $("#detail");
@@ -226,14 +242,12 @@ async function refreshDetail() {
   const crumbs = crumbBar(d);
   const editBtn = el("button", { type: "button", class: "btn", onclick: () => openNode({ node: d }) }, "Edit");
   if (d.kind !== "network") {
-    // Header (crumbs, name, counts | buttons) then a compact Contents strip under a divider.
-    box.replaceChildren(el("div", { class: "dhead dhead-group" },
-      el("div", { class: "row", style: "flex-direction:column;align-items:flex-start;gap:4px" }, crumbs, el("h1", {}, d.name),
-        el("p", { class: "roll-stats", id: "rollStats" }, `${d.kind === "site" ? "Site" : "Area"} · pick a network inside it to join.`)),
-      el("div", { class: "spacer" }),
-      el("div", { class: "row" }, d.kind === "site" ? exportMenu(d) : null, editBtn,
-        el("button", { type: "button", class: "btn", onclick: () => openNode({ parent: d, kind: "area" }) }, "+ Area"),
-        el("button", { type: "button", class: "btn btn-primary", onclick: () => openNode({ parent: d, kind: "network" }) }, "+ Network"))),
+    setHead(crumbs, d.name, [d.kind === "site" ? exportMenu(d) : null, editBtn,
+      el("button", { type: "button", class: "btn", onclick: () => openNode({ parent: d, kind: "area" }) }, "+ Area"),
+      el("button", { type: "button", class: "btn btn-primary", onclick: () => openNode({ parent: d, kind: "network" }) }, "+ Network")]);
+    // Counts line, then a compact Contents strip.
+    box.replaceChildren(
+      el("p", { class: "roll-stats", id: "rollStats" }, `${d.kind === "site" ? "Site" : "Area"} · pick a network inside it to join.`),
       el("div", { class: "contents", id: "contents", "aria-label": `Inside ${d.name}` }));
     renderContents(); renderHistory(); return;
   }
@@ -243,12 +257,8 @@ async function refreshDetail() {
   const joinBtn = el("button", { type: "button", class: "btn btn-primary", style: "padding:0 24px", onclick: (e) => doJoin(e.currentTarget) }, "Join");
   const r = d.resolved;
   const tile = (k, v, from) => el("div", { class: "tile" }, el("span", { class: "k" }, k), el("span", { class: "v" }, v), from ? el("span", { class: "from" }, from) : null);
+  setHead(crumbs, d.name, [el("div", { class: "pill-slot" }, inetPill), historyMenu(), editBtn, joinBtn]);
   box.replaceChildren(
-    el("div", { class: "dhead" },
-      el("div", { class: "row", style: "flex-direction:column;align-items:flex-start;gap:4px" }, crumbs, el("h1", {}, d.name)),
-      el("div", { class: "spacer" }),
-      el("div", { class: "pill-slot" }, inetPill),
-      el("div", { class: "row" }, historyMenu(), editBtn, joinBtn)),
     el("div", { class: "tiles" },
       tile("Network", netText(d.subnet), netFromCidr(d.subnet) ? `usable ${ip4.str(netFromCidr(d.subnet).first)} – ${ip4.str(netFromCidr(d.subnet).last)}` : null),
       d.addr_mode === "fixed"
@@ -361,15 +371,13 @@ async function renderHome() {
   state.home = h;
   const st = state.status || {};
   const last = st.last_network && findNode(st.last_network.network_id) ? st.last_network : null;
-  box.replaceChildren(el("div", { class: "dhead" },
-    el("div", { class: "row", style: "flex-direction:column;align-items:flex-start;gap:4px" }, crumbBar(null), el("h1", {}, "Home")),
-    el("div", { class: "spacer" }),
-    el("div", { class: "row" },
+  box.replaceChildren();
+  setHead(crumbBar(null), "Home", [
       last && !st.joined ? el("button", { type: "button", class: "btn", onclick: (e) => withBusy(e.currentTarget, async () => {
         const r = await api("/rejoin", { method: "POST" }); flash(`Rejoined ${last.network} as ${r.ip}/${r.prefix}`); await refreshStatus(); renderHome(); }) }, `Rejoin ${last.network}`) : null,
       el("button", { type: "button", class: "btn", onclick: () => $("#discoverBtn").click() }, "Discover networks…"),
       el("button", { type: "button", class: "btn", onclick: () => $("#importSiteFile").click() }, "Import site…"),
-      el("button", { type: "button", class: "btn btn-primary", onclick: () => openNode({ kind: "site" }) }, "+ Add site"))));
+      el("button", { type: "button", class: "btn btn-primary", onclick: () => openNode({ kind: "site" }) }, "+ Add site")]);
 
   // Recent networks: one click to join again
   const recent = h.recent.length ? el("ul", { class: "hlist" }, h.recent.map((n) => el("li", {},
@@ -1230,6 +1238,17 @@ $("#adapter").addEventListener("change", async (e) => {
   await refreshStatus(); refreshLog();
 });
 $("#showAll").addEventListener("change", refreshAdapters);
+function setConnPop(open) {
+  $("#connPop").hidden = !open; $("#connBtn").setAttribute("aria-expanded", String(open));
+  if (open) { refreshAdapters(); $("#adapter").focus(); }
+}
+$("#connBtn").addEventListener("click", () => setConnPop($("#connPop").hidden));
+document.addEventListener("click", (e) => { if (!$("#connPop").hidden && !$("#conn").contains(e.target)) setConnPop(false); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#connPop").hidden) { setConnPop(false); $("#connBtn").focus(); } });
+$("#checkInetBtn").addEventListener("click", (e) => withBusy(e.currentTarget, async () => {
+  const r = await api("/internet", { method: "POST" });
+  if (r.internet === 2) flash(r.detail, "warn"); else flash(`Internet check: ${inetInfo(r.internet).text}`);
+  await refreshStatus(); }));
 $("#search").addEventListener("input", renderTree);
 $("#newSiteBtn").addEventListener("click", () => { $("#addMenu").open = false; openNode({ kind: "site" }); });
 $("#importSiteFile").addEventListener("change", async (e) => {
@@ -1241,8 +1260,13 @@ $("#dhcpBtn").addEventListener("click", async (e) => {
   if (state.detail) refreshDetail();
 });
 $("#rejoinBtn").addEventListener("click", (e) => withBusy(e.currentTarget, async () => {
-  const r = await api("/rejoin", { method: "POST" }); flash(`Rejoined as ${r.ip}/${r.prefix}`);
-  await refreshStatus(); await refreshTree(); await refreshDetail(); }));
+  const r = await api("/rejoin", { method: "POST" }); flash(`Rejoined as ${r.ip}/${r.prefix}`); setConnPop(false);
+  await refreshStatus(); await refreshTree();
+  const id = state.status && state.status.joined && state.status.joined.network_id;
+  if (id && findNode(id)) goTo(id); else await refreshDetail(); }));
+
+// Toasts sit just under the top bar, whatever height it wraps to.
+if (window.ResizeObserver) new ResizeObserver(([e]) => document.documentElement.style.setProperty("--tb-h", `${Math.round(e.target.getBoundingClientRect().bottom)}px`)).observe($("#topbar"));
 
 (async function init() {
   try { applyTheme((await api("/settings/ui")).theme); } catch (e) { try { applyTheme(localStorage.getItem("netjoin-theme")); } catch (e2) {} }
