@@ -79,6 +79,7 @@ def ping(req, data):
 
 def status(req, data):
     s = eng().status()
+    s["version"] = __version__
     s["data_dir"] = str(paths.data_dir())
     s["portable"] = paths.is_portable()
     s["npcap"] = npcap_mod.status() if eng().backend.kind == "windows" else \
@@ -163,6 +164,10 @@ def rejoin(req, data):
 
 def internet(req, data):
     return eng().internet_check()
+
+
+def home(req, data):
+    return eng().store.home_summary()
 
 
 def scan_status(req, data):
@@ -300,6 +305,7 @@ def build_app(engine: Engine, port: int, scans: ScanManager) -> Starlette:
         Route("/api/dhcp", api(dhcp), methods=["POST"]),
         Route("/api/rejoin", api(rejoin), methods=["POST"]),
         Route("/api/internet", api(internet), methods=["POST"]),
+        Route("/api/home", api(home)),
         Route("/api/scan", api(scan_status)),
         Route("/api/scan", api(scan_start), methods=["POST"]),
         Route("/api/scan/cancel", api(scan_cancel), methods=["POST"]),

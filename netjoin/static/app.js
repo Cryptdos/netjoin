@@ -189,7 +189,9 @@ function renderTree() {
     return el("li", {}, item, kids.length && open ? el("ul", {}, build(kids)) : null);
   });
   const nodes = build(state.tree);
-  $("#tree").replaceChildren(...(nodes.length ? nodes : [el("li", { class: "empty" }, q ? "Nothing matches." : "No sites yet.")]));
+  const home = q ? null : el("li", {}, el("div", { class: "item home-item" + (state.selected === "home" ? " sel" : "") },
+    el("span", { class: "tog" }, ""), el("button", { type: "button", class: "lbl", onclick: showHome }, houseIcon(), el("span", { class: "nm" }, "Home"))));
+  $("#tree").replaceChildren(...[home].filter(Boolean), ...(nodes.length ? nodes : [el("li", { class: "empty" }, q ? "Nothing matches." : "No sites yet.")]));
 }
 
 function findNode(id, nodes = state.tree) {
@@ -206,17 +208,14 @@ async function select(n) {
 // ---------- detail ----------
 async function refreshDetail() {
   const box = $("#detail");
-  if (state.selected == null || !findNode(state.selected)) {
-    state.detail = null;
-    box.replaceChildren(el("div", { class: "empty" }, "Pick a network on the left, or add a site to get started."));
-    renderHistory(); return;
+  if (state.selected === "home" || state.selected == null || !findNode(state.selected)) {
+    state.selected = "home"; state.detail = null;
+    document.body.classList.add("at-home");
+    await renderHome(); return;
   }
+  document.body.classList.remove("at-home");
   const d = state.detail = await api(`/nodes/${state.selected}`);
-  // Breadcrumbs: each part goes to that site / area.
-  const crumbs = el("nav", { class: "crumbs", "aria-label": "Breadcrumb" },
-    d.crumbs.length ? d.crumbs.flatMap((c, i) => [i ? el("span", { class: "sep", "aria-hidden": "true" }, " › ") : null,
-      el("button", { type: "button", class: "crumb", title: `Go to ${c.kind} ${c.name}`, onclick: () => goTo(c.id) }, c.name)])
-      : [el("span", {}, d.kind === "site" ? "Site" : "")]);
+  const crumbs = crumbBar(d);
   const editBtn = el("button", { type: "button", class: "btn", onclick: () => openNode({ node: d }) }, "Edit");
   if (d.kind !== "network") {
     box.replaceChildren(el("div", { class: "dhead" },
@@ -225,8 +224,9 @@ async function refreshDetail() {
       el("div", { class: "row" }, d.kind === "site" ? exportMenu(d) : null, editBtn,
         el("button", { type: "button", class: "btn", onclick: () => openNode({ parent: d, kind: "area" }) }, "+ Area"),
         el("button", { type: "button", class: "btn btn-primary", onclick: () => openNode({ parent: d, kind: "network" }) }, "+ Network"))),
-      el("p", { class: "roll-stats", id: "rollStats" }, `${d.kind === "site" ? "Site" : "Area"} · pick a network inside it to join.`));
-    renderHistory(); return;
+      el("p", { class: "roll-stats", id: "rollStats" }, `${d.kind === "site" ? "Site" : "Area"} · pick a network inside it to join.`),
+      el("div", { class: "contents", id: "contents", "aria-label": `Inside ${d.name}` }));
+    renderContents(); renderHistory(); return;
   }
   const inetPill = d.last_internet == null ? el("span", { class: "pill" }, "Internet: not checked yet")
     : el("span", { class: "pill" + inetInfo(d.last_internet).cls }, globe(inetInfo(d.last_internet).off),
@@ -266,7 +266,202 @@ function historyMenu() {
 }
 document.addEventListener("click", (e) => { const m = $("#histMenu"); if (m && m.open && !m.contains(e.target)) m.open = false; });
 
-function goTo(id) { const n = findNode(id); if (n) select(n); }
+function goTo(id) { if (id === "home") return showHome(); const n = findNode(id); if (n) select(n); }
+async function showHome() { state.selected = "home"; saveUi(); renderTree(); await refreshDetail(); }
+
+// ---------- Breadcrumbs: Home › Site ▾ › Area ▾ › Network ›▾ (Explorer style) ----------
+// Each ▾ lists what's inside that level, so you can go sideways or forward without the Sites list.
+const KIND_LABEL = { site: "Site", area: "Area", network: "Network" };
+function crumbBar(d) {
+  const nav = el("nav", { class: "crumbs", "aria-label": "Breadcrumb" });
+  const chain = d ? [...d.crumbs, { id: d.id, name: d.name, kind: d.kind }] : [];
+  const parts = [{ id: "home", name: "Home", kind: "home" }, ...chain];
+  parts.forEach((c, i) => {
+    const last = i === parts.length - 1;
+    const kids = c.id === "home" ? state.tree : (findNode(c.id) || {}).children || [];
+    const label = c.id === "home" ? [houseIcon(), "Home"] : c.name;
+    nav.append(last
+      ? el("span", { class: "crumb crumb-here", "aria-current": "page" }, label)
+      : el("button", { type: "button", class: "crumb", title: c.id === "home" ? "Go to Home" : `Go to ${c.kind} ${c.name}`,
+          onclick: () => goTo(c.id) }, label));
+    if (kids.length) {
+      const next = parts[i + 1];
+      nav.append(el("button", { type: "button", class: "crumb-menu" + (last ? " forward" : ""),
+        "aria-haspopup": "menu", "aria-label": last ? `Go into ${c.name}` : `Other items in ${c.name}`,
+        title: last ? `What's inside ${c.name}` : `Everything in ${c.id === "home" ? "Home" : c.name}`,
+        onclick: (e) => openCrumbMenu(e.currentTarget, kids, next ? next.id : null) }, last ? "›▾" : "▾"));
+    } else if (!last) {
+      nav.append(el("span", { class: "sep", "aria-hidden": "true" }, "›"));
+    }
+  });
+  return nav;
+}
+function houseIcon() {
+  const ns = "http://www.w3.org/2000/svg"; const sv = document.createElementNS(ns, "svg");
+  for (const [k, v] of Object.entries({ width: 13, height: 13, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2.2, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) sv.setAttribute(k, v);
+  sv.innerHTML = '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/>';
+  return sv;
+}
+function openCrumbMenu(btn, items, currentId) {
+  closeCrumbMenu();
+  const pop = el("div", { class: "crumb-pop", id: "crumbPop", role: "menu" },
+    items.map((n) => el("button", { type: "button", role: "menuitem", class: n.id === currentId ? "here" : null,
+      onclick: () => { closeCrumbMenu(); goTo(n.id); } },
+      el("span", { class: "k" }, KIND_LABEL[n.kind] || ""), el("span", { class: "nm" }, n.name),
+      n.kind === "network" ? el("span", { class: "sub mono" }, n.subnet || "") :
+        el("span", { class: "sub" }, `${(n.children || []).length} inside`))));
+  document.body.append(pop);
+  const r = btn.getBoundingClientRect();
+  pop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 8))}px`;
+  pop.style.top = `${r.bottom + 4}px`;
+  pop.style.maxHeight = `${Math.max(160, window.innerHeight - r.bottom - 16)}px`;
+  btn.setAttribute("aria-expanded", "true"); pop.dataset.for = "1"; crumbMenuBtn = btn;
+  (pop.querySelector(".here") || pop.querySelector("button")).focus();
+}
+let crumbMenuBtn = null;
+function closeCrumbMenu() { const p = $("#crumbPop"); if (p) p.remove(); if (crumbMenuBtn) crumbMenuBtn.setAttribute("aria-expanded", "false"); crumbMenuBtn = null; }
+document.addEventListener("click", (e) => { const p = $("#crumbPop"); if (p && !p.contains(e.target) && e.target !== crumbMenuBtn) closeCrumbMenu(); });
+document.addEventListener("keydown", (e) => {
+  const p = $("#crumbPop"); if (!p) return;
+  const items = [...p.querySelectorAll("button")]; const i = items.indexOf(document.activeElement);
+  if (e.key === "Escape") { const b = crumbMenuBtn; closeCrumbMenu(); if (b) b.focus(); e.preventDefault(); }
+  else if (e.key === "ArrowDown") { items[(i + 1) % items.length].focus(); e.preventDefault(); }
+  else if (e.key === "ArrowUp") { items[(i - 1 + items.length) % items.length].focus(); e.preventDefault(); }
+});
+window.addEventListener("resize", closeCrumbMenu);
+
+// ---------- Home ----------
+function ago(ts) {
+  if (!ts) return "never";
+  const s = (Date.now() - new Date(ts).getTime()) / 1000;
+  if (s < 90) return "just now";
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
+  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+  const days = Math.round(s / 86400);
+  return days < 31 ? `${days} day${days === 1 ? "" : "s"} ago` : new Date(ts).toLocaleDateString();
+}
+const card = (title, ...body) => el("section", { class: "panel hcard" }, el("h2", {}, title), ...body);
+const nodePath = (id) => { const out = []; const walk = (ns, p) => { for (const n of ns) { if (n.id === id) { out.push(...p, n.name); return true; } if (walk(n.children || [], [...p, n.name])) return true; } return false; }; walk(state.tree, []); return out; };
+
+async function renderHome() {
+  const box = $("#detail"); const hv = $("#homeView");
+  let h; try { h = await api("/home"); } catch (e) { return; }
+  if (state.selected !== "home") return;
+  state.home = h;
+  const st = state.status || {};
+  const last = st.last_network && findNode(st.last_network.network_id) ? st.last_network : null;
+  box.replaceChildren(el("div", { class: "dhead" },
+    el("div", { class: "row", style: "flex-direction:column;align-items:flex-start;gap:4px" }, crumbBar(null), el("h1", {}, "Home")),
+    el("div", { class: "spacer" }),
+    el("div", { class: "row" },
+      last && !st.joined ? el("button", { type: "button", class: "btn", onclick: (e) => withBusy(e.currentTarget, async () => {
+        const r = await api("/rejoin", { method: "POST" }); flash(`Rejoined ${last.network} as ${r.ip}/${r.prefix}`); await refreshStatus(); renderHome(); }) }, `Rejoin ${last.network}`) : null,
+      el("button", { type: "button", class: "btn", onclick: () => $("#discoverBtn").click() }, "Discover networks…"),
+      el("button", { type: "button", class: "btn", onclick: () => $("#importSiteFile").click() }, "Import site…"),
+      el("button", { type: "button", class: "btn btn-primary", onclick: () => openNode({ kind: "site" }) }, "+ Add site"))));
+
+  // Recent networks: one click to join again
+  const recent = h.recent.length ? el("ul", { class: "hlist" }, h.recent.map((n) => el("li", {},
+    el("div", { class: "grow" },
+      el("button", { type: "button", class: "linkish", onclick: () => goTo(n.id), title: "Open this network" }, n.name),
+      el("span", { class: "sub2" }, n.path.split(" › ").slice(0, -1).join(" › "))),
+    el("div", { class: "small muted right" }, el("span", { class: "mono" }, n.ip), el("span", { class: "sub2" }, ago(n.ts))),
+    n.internet === 1 ? el("span", { class: "inet yes", title: "Had internet at last join" }, globe(false)) : el("span", { class: "inet-spacer" }),
+    el("button", { type: "button", class: "btn small btn-primary", onclick: (e) => joinFromHome(n.id, e.currentTarget) }, "Join"))))
+    : el("p", { class: "muted" }, "Networks you join show up here, with one-click Join.");
+
+  // This PC
+  const a = st.adapter; const p = st.primary;
+  const kv = (k, v) => [el("dt", {}, k), el("dd", {}, v)];
+  const pc = el("dl", { class: "kv" },
+    ...kv("Adapter", st.adapter_missing ? `${st.adapter_missing.name} (unplugged)` : a ? `${a.name}${a.description ? " – " + a.description : ""}` : "none picked"),
+    ...kv("Address", p ? `${p.ip}/${p.prefix} · ${a && a.dhcp ? "DHCP" : "Static"}${st.joined ? ` · ${st.joined.network}` : ""}` : "—"),
+    ...kv("MAC", a && a.mac ? a.mac : "—"),
+    ...kv("Internet", st.internet == null ? "not checked" : inetInfo(st.internet).text),
+    ...kv("Npcap", st.npcap ? (st.npcap.available ? "installed" : st.npcap.note) : "—"),
+    ...kv("NetJoin", `${st.version || ""}${st.backend === "fake" ? " (demo mode)" : ""}`));
+
+  // Sites
+  const sites = h.sites.length ? el("div", { class: "contents" }, h.sites.map((x) => el("button", { type: "button", class: "ccard", onclick: () => goTo(x.id) },
+    el("span", { class: "k" }, "Site"), el("span", { class: "nm" }, x.name),
+    el("span", { class: "meta" }, `${x.networks} network${x.networks === 1 ? "" : "s"} · ${x.devices} device${x.devices === 1 ? "" : "s"} · ${x.bacnet} BACnet`),
+    el("span", { class: "meta" }, x.last_join ? `Last joined ${ago(x.last_join)}` : "Not joined yet"),
+    x.inactive ? el("span", { class: "gone small" }, `${x.inactive} inactive`) : null)))
+    : el("p", { class: "muted" }, "No sites yet – add one, import one, or run Discover.");
+
+  // Needs attention
+  const at = h.attention; const att = [];
+  for (const x of at.inactive) att.push(el("li", {}, el("span", { class: "gone" }, "●"), el("div", { class: "grow" },
+    el("button", { type: "button", class: "linkish", onclick: () => openMissing(x.id) }, x.path),
+    el("span", { class: "sub2" }, `${x.count} device${x.count === 1 ? "" : "s"} not seen in the latest scan`))));
+  for (const x of at.clashes) att.push(el("li", {}, el("span", { class: "warn-dot" }, "●"), el("div", { class: "grow" },
+    el("button", { type: "button", class: "linkish", onclick: () => goTo(x.id) }, x.path),
+    el("span", { class: "sub2" }, `${x.ip} was in use ${x.count}× this week – worth telling site IT?`))));
+  for (const x of at.never_scanned) att.push(el("li", {}, el("span", { class: "muted" }, "○"), el("div", { class: "grow" },
+    el("button", { type: "button", class: "linkish", onclick: () => goTo(x.id) }, x.path),
+    el("span", { class: "sub2" }, `${x.subnet} · never scanned`))));
+  const attention = att.length ? el("ul", { class: "hlist attn" }, att) : el("p", { class: "muted" }, "Nothing needs attention.");
+
+  // Stats
+  const S = h.stats;
+  const tile = (n, label, title) => el("div", { class: "stat", title: title || null }, el("span", { class: "n" }, n.toLocaleString()), el("span", { class: "l" }, label));
+  const maxV = Math.max(1, ...S.vendors.map((v) => v.count));
+  const vendors = S.vendors.length ? el("ul", { class: "bars", "aria-label": "Devices by vendor" }, S.vendors.map((v) =>
+    el("li", { title: `${v.name}: ${v.count} device${v.count === 1 ? "" : "s"}` },
+      el("span", { class: "bl" }, v.name),
+      el("span", { class: "bt" }, el("span", { class: "bf", style: `width:${Math.max(2, (v.count / maxV) * 100)}%` })),
+      el("span", { class: "bv" }, String(v.count))))) : el("p", { class: "muted small" }, "Vendors appear after your first scan.");
+  const facts = el("dl", { class: "kv" },
+    ...kv("Most visited site", S.most_visited ? `${S.most_visited.name} (${S.most_visited.joins} join${S.most_visited.joins === 1 ? "" : "s"})` : "—"),
+    ...kv("Busiest network", S.busiest ? `${S.busiest.path} (${S.busiest.devices} devices)` : "—"),
+    ...kv("Saved", `${S.areas} area${S.areas === 1 ? "" : "s"} · ${S.subnets} subnet${S.subnets === 1 ? "" : "s"}`),
+    ...kv("Joins all time", String(S.joins_total)),
+    ...kv("Using NetJoin since", S.since ? new Date(S.since).toLocaleDateString() : "—"));
+  const stats = [el("div", { class: "stats" },
+    tile(S.sites, "sites"), tile(S.networks, "networks"), tile(S.devices, "devices found"), tile(S.bacnet, "BACnet controllers"),
+    tile(S.joins_week, "joins this week"), tile(S.clashes_dodged, "clashes dodged", "Times NetJoin found an address in use and moved on")),
+    el("div", { class: "split" }, el("div", {}, el("h3", {}, "Devices by vendor"), vendors), el("div", {}, el("h3", {}, "Facts"), facts))];
+
+  hv.replaceChildren(
+    el("div", { class: "home-top" }, card("Recent networks", recent), card("Needs attention", attention), card("This PC", pc)),
+    el("section", { class: "panel hcard wide" }, el("h2", {}, "Sites"), sites),
+    el("section", { class: "panel hcard wide2" }, el("h2", {}, "Stats"), ...stats));
+}
+
+async function joinFromHome(id, btn) {
+  const name = (findNode(id) || {}).name || "network";
+  await withBusy(btn, async () => {
+    const r = await api("/join", { method: "POST", body: { network_id: id } });
+    flash(`Joined ${name} as ${r.ip}/${r.prefix} · ${inetInfo(r.internet).text}`, r.internet === 2 ? "warn" : "info");
+  });
+  await refreshStatus(); if (state.selected === "home") renderHome();
+}
+
+function openMissing(id) {
+  state.filter = "missing";
+  for (const o of document.querySelectorAll(".chip")) { const on = o.dataset.filter === "missing"; o.classList.toggle("on", on); o.setAttribute("aria-pressed", String(on)); }
+  goTo(id);
+}
+
+// ---------- Contents strip on site / area pages: a card for each thing inside ----------
+function renderContents() {
+  const box = $("#contents"); const d = state.detail;
+  if (!box || !d || d.kind === "network") return;
+  const node = findNode(d.id); const kids = (node && node.children) || [];
+  const devs = (state.devData && state.devData.devices) || [];
+  const netIdsUnder = (n) => n.kind === "network" ? [n.id] : (n.children || []).flatMap(netIdsUnder);
+  const count = (ids, pred = () => true) => devs.filter((x) => !x.is_self && pred(x) && (x.network_ids || []).some((i) => ids.includes(i))).length;
+  if (!kids.length) { box.replaceChildren(el("p", { class: "small muted" }, `Nothing in this ${d.kind} yet – add an area or a network.`)); return; }
+  box.replaceChildren(...kids.map((n) => {
+    const ids = netIdsUnder(n); const total = count(ids); const gone = count(ids, (x) => x.inactive);
+    const meta = n.kind === "network"
+      ? [el("span", { class: "mono" }, n.subnet || ""), ` · ${total} device${total === 1 ? "" : "s"}`]
+      : [`${ids.length} network${ids.length === 1 ? "" : "s"} · ${total} device${total === 1 ? "" : "s"}`];
+    return el("button", { type: "button", class: "ccard", onclick: () => goTo(n.id), title: `Open ${n.name}` },
+      el("span", { class: "k" }, KIND_LABEL[n.kind]), el("span", { class: "nm" }, n.name),
+      el("span", { class: "meta" }, meta), gone ? el("span", { class: "gone small" }, `${gone} inactive`) : null);
+  }));
+}
 
 // Site page: Export ▾ (plan item 1)
 function exportMenu(d) {
@@ -424,7 +619,7 @@ async function refreshDevices() {
   $("#devTitle").textContent = d.kind === "network" ? "Devices on this network" : `Devices in this ${d.kind}`;
   $("#lastScan").textContent = r.last_scan ? `Last: ${r.last_scan.kind}, ${when(r.last_scan.ts)}` : "";
   fillDeviceFilters(r);
-  if (d.kind !== "network") { renderScanMenu(); renderRollStats(r); }
+  if (d.kind !== "network") { renderScanMenu(); renderRollStats(r); renderContents(); }
   renderDevices();
 }
 

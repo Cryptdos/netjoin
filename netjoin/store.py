@@ -496,6 +496,106 @@ class Store:
             self.db.commit()
         return n
 
+    # ---------- home page ----------
+    def home_summary(self, recent_limit: int = 6) -> dict:
+        """Everything the Home page shows, worked out in one go from data NetJoin already keeps."""
+        from collections import Counter
+        from datetime import datetime, timedelta, timezone
+
+        week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat(timespec="milliseconds")
+        nodes = {r["id"]: dict(r) for r in self.db.execute("SELECT * FROM nodes")}
+        networks = [n for n in nodes.values() if n["kind"] == "network"]
+        site_of: dict[int, int] = {}
+
+        def root(nid):
+            while nodes[nid]["parent_id"] is not None:
+                nid = nodes[nid]["parent_id"]
+            return nid
+        for n in nodes.values():
+            site_of[n["id"]] = root(n["id"])
+
+        def path(nid):
+            out = []
+            while nid is not None:
+                out.append(nodes[nid]["name"])
+                nid = nodes[nid]["parent_id"]
+            return " › ".join(reversed(out))
+
+        # devices per subnet (inactive flags need the scan list, so use devices())
+        subnets = sorted({n["subnet"] for n in networks if n["subnet"]})
+        devs_by_subnet = {sn: [d for d in self.devices(sn) if not d["is_self"]] for sn in subnets}
+        last_scan = {sn: (self.scans(sn, 1) or [{}])[0].get("started") for sn in subnets}
+        hist = [dict(r) for r in self.db.execute("SELECT * FROM history ORDER BY id DESC")]
+        worked = [h for h in hist if h["result"] == "worked"]
+
+        # recent networks: the last few distinct networks joined successfully
+        recent, seen = [], set()
+        for h in worked:
+            nid = h["network_id"]
+            if nid in seen or nid not in nodes:
+                continue
+            seen.add(nid)
+            n = nodes[nid]
+            recent.append({"id": nid, "name": n["name"], "path": path(nid), "subnet": n["subnet"], "ip": h["ip"],
+                           "ts": h["ts"], "internet": h["internet"]})
+            if len(recent) >= recent_limit:
+                break
+
+        # site cards
+        sites = []
+        for sid, s in nodes.items():
+            if s["kind"] != "site":
+                continue
+            nets = [n for n in networks if site_of[n["id"]] == sid]
+            sns = {n["subnet"] for n in nets if n["subnet"]}
+            ds = [d for sn in sns for d in devs_by_subnet.get(sn, [])]
+            nids = {n["id"] for n in nets}
+            last_join = next((h["ts"] for h in worked if h["network_id"] in nids), None)
+            scans = [last_scan[sn] for sn in sns if last_scan.get(sn)]
+            sites.append({"id": sid, "name": s["name"], "networks": len(nets),
+                          "areas": sum(1 for n in nodes.values() if n["kind"] == "area" and site_of[n["id"]] == sid),
+                          "devices": len(ds), "bacnet": sum(1 for d in ds if d["bacnet_instance"] is not None),
+                          "inactive": sum(1 for d in ds if d["inactive"]), "last_join": last_join,
+                          "last_scan": max(scans) if scans else None})
+        sites.sort(key=lambda x: (x["last_join"] or "", x["name"]), reverse=True)
+
+        # needs attention
+        inactive = []
+        for n in networks:
+            k = sum(1 for d in devs_by_subnet.get(n["subnet"], []) if d["inactive"])
+            if k:
+                inactive.append({"id": n["id"], "path": path(n["id"]), "count": k})
+        never = [{"id": n["id"], "path": path(n["id"]), "subnet": n["subnet"]} for n in networks
+                 if not last_scan.get(n["subnet"]) and not devs_by_subnet.get(n["subnet"])]
+        clash_counts = Counter((h["network_id"], h["ip"]) for h in hist if h["result"] == "clashed" and h["ts"] >= week_ago)
+        clashes = [{"id": nid, "path": path(nid), "ip": ip, "count": c} for (nid, ip), c in clash_counts.most_common(10)
+                   if nid in nodes]
+
+        # stats
+        all_devs = [d for ds in devs_by_subnet.values() for d in ds]
+        vend = Counter((d["vendor"] or d["mac_vendor"] or "Unknown") for d in all_devs)
+        top = vend.most_common(6)
+        other = sum(vend.values()) - sum(c for _, c in top)
+        site_joins = Counter(site_of[h["network_id"]] for h in worked if h["network_id"] in nodes)
+        busiest = max(networks, key=lambda n: len(devs_by_subnet.get(n["subnet"], [])), default=None)
+        firsts = [n["created"] for n in nodes.values() if n.get("created")] + [h["ts"] for h in hist[-1:]]
+        stats = {
+            "sites": sum(1 for n in nodes.values() if n["kind"] == "site"),
+            "areas": sum(1 for n in nodes.values() if n["kind"] == "area"),
+            "networks": len(networks), "subnets": len(subnets),
+            "devices": len(all_devs), "bacnet": sum(1 for d in all_devs if d["bacnet_instance"] is not None),
+            "vendors": [{"name": k, "count": c} for k, c in top] + ([{"name": "Other", "count": other}] if other else []),
+            "joins_week": sum(1 for h in worked if h["ts"] >= week_ago), "joins_total": len(worked),
+            "clashes_dodged": sum(1 for h in hist if h["result"] == "clashed"),
+            "most_visited": ({"id": site_joins.most_common(1)[0][0], "name": nodes[site_joins.most_common(1)[0][0]]["name"],
+                              "joins": site_joins.most_common(1)[0][1]} if site_joins else None),
+            "busiest": ({"id": busiest["id"], "path": path(busiest["id"]), "devices": len(devs_by_subnet.get(busiest["subnet"], []))}
+                        if busiest and devs_by_subnet.get(busiest["subnet"]) else None),
+            "since": min(firsts) if firsts else None,
+        }
+        return {"recent": recent, "sites": sites,
+                "attention": {"inactive": inactive, "never_scanned": never, "clashes": clashes}, "stats": stats}
+
     # ---------- import / export ----------
     EXPORT_FIELDS = ("kind", "name", "subnet", "range_start", "range_end", "gw_override", "gateway",
                      "dns_override", "dns", "notes", "addr_mode", "fixed_ip", "alloc")

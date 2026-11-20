@@ -17,6 +17,8 @@ Design notes: [docs/network-join-tool.md](docs/network-join-tool.md)
 
 **v0.6.0 (branch `v0.6`, being tested):** network editor with IP Network + mask, allowed range or static IP, allocation order (first / last / random / last used); Discover fixes for quiet BACnet-only networks and DHCP masks; adapter followed by MAC (USB dongles); device roll-up on sites and areas with search, sorting, filters, inactive devices and CSV export; per-site export / import; clickable breadcrumbs, hideable Sites list, IP history drop-down. Details: [docs/v0.6-plan.md](docs/v0.6-plan.md).
 
+**v0.7.0 (branch `v0.7`, being tested):** opens on a **Home** page – recent networks with one-click Join, needs attention (inactive devices, addresses in use, never-scanned networks), This PC, site cards and stats. Breadcrumbs now go forward and back (`⌂ Home ▾ › Site ▾ › Area ▾ ›▾`) so the Sites list can stay closed; site and area pages show a Contents strip. Details: [docs/v0.7-home-and-breadcrumbs.md](docs/v0.7-home-and-breadcrumbs.md).
+
 **Phase 4 (v0.4.0):** works in narrow windows – split-screen, small browser windows, down to phone width. Device list switches to cards when its panel is narrow. Discover offers **Join & scan** for networks found from another subnet.
 
 ## Quick start (from source)

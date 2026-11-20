@@ -271,6 +271,24 @@ class StoreAndJoin(unittest.TestCase):
         d11 = {d["key"]: d for d in self.store.devices(sub)}["10.20.5.11"]
         self.assertEqual((d11["inactive"], d11["new"]), (False, True))
 
+    def test_home_summary(self):
+        self.engine.join(self.net["id"])                                 # .200 clashes, .201 works
+        self.store.upsert_device("10.20.5.0/24", "10.20.5.10", "10.20.5.10", "bacnet", bacnet_instance=1, vendor="Siemens")
+        self.store.upsert_device("10.20.5.0/24", "10.20.5.11", "10.20.5.11", "arp", mac_vendor="Intel")
+        never = self.store.create_node("network", self.area["id"], {"name": "Unscanned", "subnet": "10.20.9.0/24"})
+        h = self.store.home_summary()
+        self.assertEqual([r["name"] for r in h["recent"]], ["FCU"])
+        self.assertEqual(h["recent"][0]["ip"], "10.20.5.201")
+        site = h["sites"][0]
+        self.assertEqual((site["name"], site["networks"], site["devices"], site["bacnet"]), ("Site", 2, 2, 1))
+        st = h["stats"]
+        self.assertEqual((st["sites"], st["networks"], st["devices"], st["bacnet"], st["joins_total"], st["clashes_dodged"]),
+                         (1, 2, 2, 1, 1, 1))
+        self.assertEqual({v["name"] for v in st["vendors"]}, {"Siemens", "Intel"})
+        self.assertEqual(st["most_visited"]["name"], "Site")
+        self.assertEqual([x["id"] for x in h["attention"]["never_scanned"]], [never["id"]])
+        self.assertEqual(h["attention"]["clashes"][0]["ip"], "10.20.5.200")
+
     def test_rollup_by_node(self):
         other = self.store.create_node("network", self.area["id"], {"name": "AHU", "subnet": "10.20.6.0/24"})
         twin = self.store.create_node("network", self.area["id"], {"name": "FCU twin", "subnet": "10.20.5.0/24"})
