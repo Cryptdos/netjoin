@@ -765,7 +765,7 @@ const DEV_FILTERS = {
 // Sort keys: the first value decides; null = blank, always sorted last whichever direction.
 const DEV_SORTS = {
   ip: (x) => [ipKey(x.ip), x.key], name: (x) => [(x.name || "").toLowerCase() || null, ipKey(x.ip)],
-  vendor: (x) => [vendorName(x).toLowerCase() || null, ipKey(x.ip)], bacnet: (x) => [x.bacnet_instance ?? null, ipKey(x.ip)],
+  vendor: (x) => [(x.is_self ? "this pc" : vendorName(x).toLowerCase()) || null, ipKey(x.ip)], bacnet: (x) => [x.bacnet_instance ?? null, ipKey(x.ip)],
   mac: (x) => [x.mac || null, ipKey(x.ip)], ports: (x) => [(x.ports || "").split(",").filter(Boolean).length || null, ipKey(x.ip)],
   seen: (x) => [x.last_seen || null, ipKey(x.ip)], network: (x) => [x.network || null, ipKey(x.ip)],
 };
@@ -782,8 +782,8 @@ function visibleDevices() {
   const cmp = (a, b) => { const ka = key(a), kb = key(b);
     if ((ka[0] == null) !== (kb[0] == null)) return ka[0] == null ? 1 : -1;      // blanks last
     for (let i = 0; i < ka.length; i++) { if (ka[i] < kb[i]) return -dir; if (ka[i] > kb[i]) return dir; } return 0; };
-  // "This PC" stays at the top whatever the sort
-  return rows.sort((a, b) => (b.is_self - a.is_self) || cmp(a, b));
+  // "This PC" sorts like any other row (it keeps its highlight, so it's easy to spot)
+  return rows.sort(cmp);
 }
 
 function goneText(ts) {
