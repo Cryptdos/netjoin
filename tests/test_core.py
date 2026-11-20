@@ -71,6 +71,25 @@ class NetshParsing(unittest.TestCase):
         self.assertEqual(d["Wi-Fi"][0][1:], ("preferred", "192.168.1.50"))
 
 
+class Migration(unittest.TestCase):
+    def test_old_database_gets_new_columns(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "old.db"
+            c = sqlite3.connect(p)
+            c.execute("CREATE TABLE nodes(id INTEGER PRIMARY KEY, parent_id INTEGER, kind TEXT NOT NULL, name TEXT NOT NULL,"
+                      " sort INTEGER NOT NULL DEFAULT 0, subnet TEXT, range_start TEXT, range_end TEXT,"
+                      " gw_override INTEGER NOT NULL DEFAULT 0, gateway TEXT, dns_override INTEGER NOT NULL DEFAULT 0,"
+                      " dns TEXT, notes TEXT, created TEXT, updated TEXT)")
+            c.execute("INSERT INTO nodes(kind,name,subnet,range_start,range_end) VALUES('network','N','10.0.0.0/24','10.0.0.200','10.0.0.254')")
+            c.commit()
+            c.close()
+            s = Store(p)
+            n = s.node(1)
+            self.assertEqual((n["addr_mode"], n["alloc"], n["fixed_ip"]), ("range", "first", None))
+            s.db.close()
+
+
 class IpCalc(unittest.TestCase):
     def test_default_range(self):
         self.assertEqual(ipcalc.default_range(ipcalc.parse_subnet("10.20.5.0/24")), ("10.20.5.200", "10.20.5.254"))
@@ -98,17 +117,60 @@ class StoreAndJoin(unittest.TestCase):
             self.store.create_node("network", self.area["id"], {"name": "x", "subnet": "10.0.0.0/24",
                                                                   "range_start": "10.0.1.5", "range_end": "10.0.0.9"})
 
-    def test_join_skips_clash_and_prefers_last_worked(self):
+    def test_join_skips_clash(self):
         r = self.engine.join(self.net["id"])          # .200 is "taken" in the fake back-end
         self.assertEqual((r["ip"], r["attempts"]), ("10.20.5.201", 2))
         hist = {h["ip"]: h["result"] for h in self.store.ip_history(self.net["id"])}
         self.assertEqual(hist, {"10.20.5.200": "clashed", "10.20.5.201": "worked"})
         self.engine.dhcp()
-        self.assertEqual(self.engine.rejoin()["attempts"], 1)   # goes straight to the last worked IP
+        self.assertEqual(self.engine.rejoin()["attempts"], 2)   # first free: tries .200 again (v0.6)
+
+    def test_allocation_orders(self):
+        nid = self.net["id"]
+        self.engine.join(nid)                                    # .201 worked
+        n = lambda: self.store.node(nid)                         # noqa: E731
+        self.assertEqual(self.engine.candidates(n())[:2], ["10.20.5.200", "10.20.5.201"])     # first (default)
+        self.store.update_node(nid, {"alloc": "last"})
+        self.assertEqual(self.engine.candidates(n())[:2], ["10.20.5.254", "10.20.5.253"])
+        self.store.update_node(nid, {"alloc": "sticky"})
+        self.assertEqual(self.engine.candidates(n())[0], "10.20.5.201")                       # last used
+        self.assertEqual(self.engine.next_ip(n()), {"ip": "10.20.5.201", "how": "last used"})
+        self.store.update_node(nid, {"alloc": "random"})
+        c = self.engine.candidates(n())
+        self.assertEqual(sorted(c, key=lambda x: int(x.split(".")[-1])), [f"10.20.5.{i}" for i in range(200, 255)])
+        self.assertEqual(self.engine.next_ip(n())["how"], "random from the range")
+        with self.assertRaises(StoreError):
+            self.store.update_node(nid, {"alloc": "sideways"})
+
+    def test_fixed_ip(self):
+        nid = self.net["id"]
+        with self.assertRaisesRegex(StoreError, "Enter the fixed IP"):
+            self.store.update_node(nid, {"addr_mode": "fixed"})
+        with self.assertRaisesRegex(StoreError, "isn't a usable address"):
+            self.store.update_node(nid, {"addr_mode": "fixed", "fixed_ip": "10.20.6.39"})
+        self.store.update_node(nid, {"addr_mode": "fixed", "fixed_ip": "39"})             # shorthand
+        self.assertEqual(self.store.node(nid)["fixed_ip"], "10.20.5.39")
+        self.assertEqual(self.engine.join(nid)["ip"], "10.20.5.39")
+        self.store.update_node(nid, {"fixed_ip": ".230"})                                   # "taken" in the fake
+        with self.assertRaisesRegex(JoinError, "check with site IT"):
+            self.engine.join(nid)
+
+    def test_shorthand_and_subnet_entry(self):
+        n = self.store.create_node("network", self.area["id"], {"name": "Big", "subnet": "192.168.3.95 255.255.252.0",
+                                                                  "range_start": "3.35", "range_end": ".3.45"})
+        self.assertEqual((n["subnet"], n["range_start"], n["range_end"]),
+                         ("192.168.0.0/22", "192.168.3.35", "192.168.3.45"))
+        self.store.update_node(n["id"], {"subnet": "192.168.1.7/22"})        # same network typed differently
+        self.assertEqual(self.store.node(n["id"])["range_start"], "192.168.3.35")   # range kept
+        self.store.update_node(n["id"], {"subnet": "10.1.1.0/24"})           # really different: range re-filled
+        self.assertEqual(self.store.node(n["id"])["range_start"], "10.1.1.200")
+        with self.assertRaises(StoreError):
+            self.store.update_node(n["id"], {"range_start": "abc"})
 
     def test_narrowed_range_skips_last_worked(self):
         self.engine.join(self.net["id"])                                   # works on .201
-        self.store.update_node(self.net["id"], {"range_start": "10.20.5.202", "range_end": "10.20.5.254"})
+        self.store.update_node(self.net["id"], {"range_start": "10.20.5.202", "range_end": "10.20.5.254",
+                                                "alloc": "sticky"})
         n = self.store.node(self.net["id"])
         self.assertEqual(self.engine.candidates(n)[0], "10.20.5.202")      # .201 is now outside the range
         self.assertEqual(self.engine.join(self.net["id"])["ip"], "10.20.5.202")

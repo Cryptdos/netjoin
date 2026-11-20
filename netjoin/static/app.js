@@ -17,6 +17,39 @@ const saveUi = () => { try {
   localStorage.setItem("nj.selected", JSON.stringify(state.selected));
 } catch (e) {} };
 
+// ---------- IPv4 maths (for the network editor's live preview) ----------
+const ip4 = {
+  toInt(s) {
+    const p = String(s || "").trim().split(".");
+    if (p.length !== 4 || p.some((x) => !/^\d{1,3}$/.test(x) || +x > 255)) return null;
+    return (((+p[0]) << 24) >>> 0) + ((+p[1]) << 16) + ((+p[2]) << 8) + (+p[3]);
+  },
+  str: (n) => [24, 16, 8, 0].map((b) => (n >>> b) & 255).join("."),
+  mask: (p) => (p === 0 ? 0 : ((0xFFFFFFFF << (32 - p)) >>> 0)),
+};
+function netOf(ipText, prefix) {
+  const n = ip4.toInt(ipText); if (n == null || !(prefix >= 8 && prefix <= 30)) return null;
+  const m = ip4.mask(prefix); const net = (n & m) >>> 0; const bc = (net | (~m >>> 0)) >>> 0;
+  return { net, bc, prefix, first: net + 1, last: bc - 1, count: bc - net - 1, mask: ip4.str(m) };
+}
+function netFromCidr(cidr) { const [a, p] = String(cidr || "").split("/"); return netOf(a, Number(p)); }
+// '35' / '.35' → x.y.z.35, '3.35' → x.y.3.35; full addresses unchanged; null if not an address
+function expandShort(text, nw) {
+  const t = String(text || "").trim().replace(/^\./, "");
+  if (!t) return "";
+  if (ip4.toInt(t) != null) return t;
+  const parts = t.split(".");
+  if (!nw || parts.length > 3 || parts.some((x) => !/^\d{1,3}$/.test(x) || +x > 255)) return null;
+  const base = ip4.str(nw.net).split(".");
+  return [...base.slice(0, 4 - parts.length), ...parts.map(Number)].join(".");
+}
+function defaultRange(nw) {
+  return nw.prefix === 24 ? [nw.net + 200, nw.bc - 1] : [Math.max(nw.net + 1, nw.bc - 55), nw.bc - 1];
+}
+const maskLabel = (p) => `${ip4.str(ip4.mask(p))}  (/${p})`;
+// The part of an address that changes inside a network: ".35" on a /24, "3.35" on a /22, "5.3.35" on a /14.
+function shortIp(ip, prefix) { const parts = String(ip).split("."); const keep = prefix >= 24 ? 1 : prefix >= 16 ? 2 : 3; return "." + parts.slice(4 - keep).join("."); }
+
 // ---------- helpers ----------
 function el(tag, attrs = {}, ...kids) {
   const n = document.createElement(tag);
@@ -200,14 +233,19 @@ async function refreshDetail() {
           title: d.on_subnet ? "Quick scan: ARP sweep + BACnet Who-Is" : "Join this network first, then scan",
           onclick: () => startScan("quick") }, "Scan"), joinBtn)),
     el("div", { class: "tiles" },
-      tile("Subnet", d.subnet),
-      tile("Allowed laptop range", `.${d.range_start.split(".").pop()} – .${d.range_end.split(".").pop()}`, `${d.range_start} – ${d.range_end}`),
+      tile("Network", netText(d.subnet), netFromCidr(d.subnet) ? `usable ${ip4.str(netFromCidr(d.subnet).first)} – ${ip4.str(netFromCidr(d.subnet).last)}` : null),
+      d.addr_mode === "fixed"
+        ? tile("Laptop address", d.fixed_ip || "—", "fixed IP")
+        : tile("Laptop address", `${shortIp(d.range_start, Number(d.subnet.split("/")[1]))} – ${shortIp(d.range_end, Number(d.subnet.split("/")[1]))}`, `${d.range_start} – ${d.range_end} · ${ALLOC_TEXT[d.alloc] || "first free"}`),
       tile("Gateway / DNS", `${r.gateway || "—"} / ${r.dns.length ? r.dns.join(", ") : "—"}`,
         r.gateway_from || r.dns_from ? `from ${[r.gateway_from, r.dns_from].filter(Boolean).join(" · ")}` : "none (default)"),
-      tile("Next IP on Join", d.next_ip || "—", d.next_ip && d.next_ip === d.last_worked ? "last worked" : "first in range")),
+      tile("Next IP on Join", d.next_ip || (d.next_how === "random from the range" ? "random" : "—"), d.next_how || null)),
     ...(d.notes ? [el("p", { class: "muted", style: "margin:12px 0 0;white-space:pre-line" }, d.notes)] : []));
   renderHistory();
 }
+
+const ALLOC_TEXT = { first: "first free", last: "last free", random: "random", sticky: "last used, then first" };
+function netText(cidr) { const nw = netFromCidr(cidr); return nw ? `${ip4.str(nw.net)} · ${nw.mask} (/${nw.prefix})` : cidr; }
 
 function renderHistory() {
   renderScanMenu(); refreshDevices();
@@ -535,19 +573,96 @@ function openNode({ node, parent, kind }) {
   f.id.value = node ? node.id : ""; f.kind.value = k; f.parent_id.value = node ? (node.parent_id ?? "") : parent ? parent.id : "";
   $("#nodeTitle").textContent = node ? `Edit ${k}` : `Add ${k}${parent ? " to " + parent.name : ""}`;
   $("#deleteNodeBtn").hidden = !node;
-  f.querySelector(".net-only").hidden = k !== "network";
-  f.subnet.required = k === "network";
+  const setKind = (kk) => { f.kind.value = kk; f.querySelector(".net-only").hidden = kk !== "network"; f.net_ip.required = kk === "network";
+    $("#suggestGw").hidden = kk !== "network"; };
+  setKind(k);
   if (!node && parent && !kind) {   // let the user choose area or network
     $("#nodeTitle").replaceChildren(`Add to ${parent.name}: `,
-      el("select", { id: "kindPick", onchange: (e) => { f.kind.value = e.target.value; f.querySelector(".net-only").hidden = e.target.value !== "network"; f.subnet.required = e.target.value === "network"; } },
+      el("select", { id: "kindPick", onchange: (e) => { setKind(e.target.value); netChanged(); } },
         el("option", { value: "area" }, "Area"), el("option", { value: "network" }, "Network")));
   }
+  f.dataset.rangeTouched = "";
+  f.net_mask.value = "24";
   if (node) {
-    for (const key of ["name", "subnet", "range_start", "range_end", "gateway", "dns", "notes"]) if (f[key]) f[key].value = node[key] || "";
+    for (const key of ["name", "range_start", "range_end", "fixed_ip", "gateway", "dns", "notes"]) if (f[key]) f[key].value = node[key] || "";
     f.gw_override.checked = !!node.gw_override; f.dns_override.checked = !!node.dns_override;
+    if (node.subnet) { const [a, p] = node.subnet.split("/"); f.net_ip.value = a; f.net_mask.value = p; f.dataset.rangeTouched = "1"; }
+    f.alloc.value = node.alloc || "first";
+    for (const r of f.addr_mode) r.checked = r.value === (node.addr_mode || "range");
   }
-  syncOverrides(f);
+  syncOverrides(f); syncAddrMode(); netChanged();
   $("#nodeDlg").showModal(); f.name.focus();
+}
+
+// Mask list: the common ones first, then every size, each shown as netmask and CIDR.
+(function fillMasks() {
+  const sel = $("#nodeForm").net_mask;
+  const common = [24, 16, 22, 23, 25, 26, 27, 28];
+  sel.append(el("optgroup", { label: "Common" }, common.map((p) => el("option", { value: p }, maskLabel(p)))),
+    el("optgroup", { label: "All" }, Array.from({ length: 23 }, (_, i) => 30 - i).map((p) => el("option", { value: p }, maskLabel(p)))));
+  // the same value appears twice; select the first one
+})();
+
+function currentNet() { const f = $("#nodeForm"); return netOf(f.net_ip.value, Number(f.net_mask.value)); }
+
+function netChanged() {
+  const f = $("#nodeForm");
+  if (f.kind.value !== "network") return;
+  const pv = $("#netPreview");
+  const nw = currentNet();
+  if (!f.net_ip.value.trim()) {
+    pv.className = "small preview"; pv.textContent = "Type any IP on the network (e.g. from the drawings) and pick the mask. Pasting 10.20.5.0/24 works too.";
+  } else if (!nw) {
+    pv.className = "small preview bad"; pv.textContent = "That isn't an IPv4 address.";
+  } else {
+    pv.className = "small preview ok";
+    pv.textContent = `→ Network ${ip4.str(nw.net)}/${nw.prefix} · usable ${ip4.str(nw.first)} – ${ip4.str(nw.last)} (${nw.count.toLocaleString()} addresses)`;
+    // auto-fill the laptop range unless the user set one that still fits
+    const rs = ip4.toInt(expandShort(f.range_start.value, nw)), re = ip4.toInt(expandShort(f.range_end.value, nw));
+    const fits = rs != null && re != null && rs >= nw.first && re <= nw.last;
+    if (!f.dataset.rangeTouched || !fits) { const [a, b] = defaultRange(nw); f.range_start.value = ip4.str(a); f.range_end.value = ip4.str(b); }
+    $("#suggestGw").title = `Use ${ip4.str(nw.first)} (the network's first address)`;
+  }
+  rangeChanged();
+}
+
+function rangeChanged() {
+  const f = $("#nodeForm"); const nw = currentNet(); const rp = $("#rangePreview");
+  const base = "Addresses NetJoin may give this laptop – pick a block the site doesn't use. Type 35 or .35 for short.";
+  if (!nw || !f.range_start.value.trim()) { rp.className = "small muted"; rp.textContent = base; return; }
+  const a = ip4.toInt(expandShort(f.range_start.value, nw)), b = ip4.toInt(expandShort(f.range_end.value, nw));
+  if (a == null || b == null) { rp.className = "small bad"; rp.textContent = "From / To must be addresses (or short forms like .35)."; return; }
+  if (a < nw.first || b > nw.last || a > nw.last || b < nw.first) { rp.className = "small bad"; rp.textContent = `Outside the network (${ip4.str(nw.first)} – ${ip4.str(nw.last)}).`; return; }
+  rp.className = "small muted"; rp.textContent = `${Math.abs(b - a) + 1} address(es). ${base}`;
+}
+
+function syncAddrMode() {
+  const f = $("#nodeForm"); const mode = [...f.addr_mode].find((r) => r.checked)?.value || "range";
+  for (const b of f.querySelectorAll(".mode-block")) {
+    const on = b.dataset.mode === mode; b.setAttribute("aria-disabled", on ? "false" : "true");
+    for (const i of b.querySelectorAll("input,select")) i.disabled = !on;
+  }
+}
+
+{
+  const f = $("#nodeForm");
+  f.net_ip.addEventListener("input", () => {
+    // pasted "10.20.5.0/24" or "10.20.5.0 255.255.255.0": split into IP + mask
+    const v = f.net_ip.value.trim(); const m = v.match(/^(\d+\.\d+\.\d+\.\d+)\s*(?:\/\s*(\d+)|\s+(\d+\.\d+\.\d+\.\d+))$/);
+    if (m) {
+      let p = m[2] ? Number(m[2]) : null;
+      if (m[3]) { const mi = ip4.toInt(m[3]); for (let i = 8; i <= 30; i++) if (ip4.mask(i) === mi) p = i; }
+      if (p >= 8 && p <= 30) { f.net_ip.value = m[1]; f.net_mask.value = String(p); }
+    }
+    netChanged();
+  });
+  f.net_mask.addEventListener("change", netChanged);
+  for (const n of ["range_start", "range_end"]) {
+    f[n].addEventListener("input", () => { f.dataset.rangeTouched = "1"; rangeChanged(); });
+    f[n].addEventListener("blur", () => { const x = expandShort(f[n].value, currentNet()); if (x) f[n].value = x; rangeChanged(); });
+  }
+  f.fixed_ip.addEventListener("blur", () => { const x = expandShort(f.fixed_ip.value, currentNet()); if (x) f.fixed_ip.value = x; });
+  for (const r of f.addr_mode) r.addEventListener("change", syncAddrMode);
 }
 
 // Gateway / DNS inputs are only editable while their override box is ticked.
@@ -568,7 +683,12 @@ $("#nodeForm").addEventListener("submit", async (e) => {
   const f = e.target; const id = f.id.value;
   const body = { name: f.name.value, gw_override: f.gw_override.checked, gateway: f.gateway.value.trim(),
     dns_override: f.dns_override.checked, dns: f.dns.value.trim(), notes: f.notes.value };
-  if (f.kind.value === "network") Object.assign(body, { subnet: f.subnet.value.trim(), range_start: f.range_start.value.trim(), range_end: f.range_end.value.trim() });
+  if (f.kind.value === "network") {
+    const nw = currentNet();
+    if (!nw) { $("#nodeErr").textContent = "Enter an IP on the network and pick the mask."; return; }
+    Object.assign(body, { subnet: `${ip4.str(nw.net)}/${nw.prefix}`, range_start: f.range_start.value.trim(), range_end: f.range_end.value.trim(),
+      addr_mode: [...f.addr_mode].find((r) => r.checked)?.value || "range", fixed_ip: f.fixed_ip.value.trim(), alloc: f.alloc.value });
+  }
   try {
     let n;
     if (id) n = await api(`/nodes/${id}`, { method: "PUT", body });
@@ -595,12 +715,9 @@ $("#dnsFromGw").addEventListener("click", () => {
   f.dns.value = gw;
 });
 $("#suggestGw").addEventListener("click", () => {
-  const f = $("#nodeForm");
-  let sub = f.subnet.value.trim();
-  if (!sub && state.detail && state.detail.subnet) sub = state.detail.subnet;
-  const m = sub.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)/);
-  if (!m) { $("#nodeErr").textContent = "Enter the subnet first (gateway suggestions only work on networks)."; return; }
-  f.gateway.value = `${m[1]}.${m[2]}.${m[3]}.1`;
+  const f = $("#nodeForm"); const nw = currentNet();
+  if (!nw) { $("#nodeErr").textContent = "Enter the network's IP and mask first."; return; }
+  f.gateway.value = ip4.str(nw.first);      // network + 1, e.g. 192.168.0.1 on a /22
 });
 
 // ---------- settings ----------

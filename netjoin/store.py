@@ -27,7 +27,10 @@ CREATE TABLE IF NOT EXISTS nodes(
     dns TEXT,
     notes TEXT,
     created TEXT,
-    updated TEXT
+    updated TEXT,
+    addr_mode TEXT NOT NULL DEFAULT 'range',   -- range | fixed
+    fixed_ip TEXT,
+    alloc TEXT NOT NULL DEFAULT 'first'        -- first | last | random | sticky
 );
 CREATE INDEX IF NOT EXISTS nodes_parent ON nodes(parent_id);
 CREATE TABLE IF NOT EXISTS history(
@@ -68,7 +71,9 @@ CREATE INDEX IF NOT EXISTS devices_subnet ON devices(subnet);
 
 ALLOWED_PARENTS = {"site": {None}, "area": {"site", "area"}, "network": {"site", "area"}}
 NODE_FIELDS = ("name", "subnet", "range_start", "range_end", "gw_override", "gateway",
-               "dns_override", "dns", "notes", "sort")
+               "dns_override", "dns", "notes", "sort", "addr_mode", "fixed_ip", "alloc")
+ADDR_MODES = ("range", "fixed")
+ALLOC_ORDERS = {"first": "first free", "last": "last free", "random": "random", "sticky": "last used, then first"}
 
 
 class StoreError(ValueError):
@@ -96,6 +101,11 @@ class Store:
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(devices)")}
         if "mac_vendor" not in cols:
             self.db.execute("ALTER TABLE devices ADD COLUMN mac_vendor TEXT")
+        ncols = {r["name"] for r in self.db.execute("PRAGMA table_info(nodes)")}
+        for col, ddl in (("addr_mode", "TEXT NOT NULL DEFAULT 'range'"), ("fixed_ip", "TEXT"),
+                         ("alloc", "TEXT NOT NULL DEFAULT 'first'")):
+            if col not in ncols:      # v0.6: existing networks become "range, first free"
+                self.db.execute(f"ALTER TABLE nodes ADD COLUMN {col} {ddl}")
 
     # ---------- backups ----------
     def backup(self, folder: Path, keep: int = 10) -> Path:
@@ -183,15 +193,36 @@ class Store:
         try:
             net = ipcalc.parse_subnet(rec.get("subnet") or "")
         except ValueError:
-            raise StoreError("Subnet must look like 10.20.5.0/24")
+            raise StoreError("Enter an IP on the network and pick a mask (e.g. 10.20.5.0 and 255.255.255.0)")
+        if net.prefixlen > 30:
+            raise StoreError("The mask leaves no room for devices – use /30 or bigger")
         rec["subnet"] = str(net)
+        for k in ("range_start", "range_end", "fixed_ip"):
+            try:
+                rec[k] = ipcalc.expand(rec.get(k), net) or None
+            except ValueError as e:
+                raise StoreError(str(e))
         if not rec.get("range_start") or not rec.get("range_end"):
             rec["range_start"], rec["range_end"] = ipcalc.default_range(net)
         for k in ("range_start", "range_end"):
             if not ipcalc.in_subnet(rec[k], net):
-                raise StoreError(f"{k.replace('_', ' ').capitalize()} {rec[k]} isn't a usable address in {net}")
+                label = "Range start" if k == "range_start" else "Range end"
+                raise StoreError(f"{label} {rec[k]} isn't a usable address in {net}")
+        rec["addr_mode"] = rec.get("addr_mode") or "range"
+        if rec["addr_mode"] not in ADDR_MODES:
+            raise StoreError("Laptop address must be 'range' or 'fixed'")
+        rec["alloc"] = rec.get("alloc") or "first"
+        if rec["alloc"] not in ALLOC_ORDERS:
+            raise StoreError("Unknown allocation order")
+        if rec["addr_mode"] == "fixed":
+            if not rec.get("fixed_ip"):
+                raise StoreError("Enter the fixed IP for this laptop")
+            if not ipcalc.in_subnet(rec["fixed_ip"], net):
+                raise StoreError(f"Fixed IP {rec['fixed_ip']} isn't a usable address in {net}")
+        elif rec.get("fixed_ip") and not ipcalc.in_subnet(rec["fixed_ip"], net):
+            rec["fixed_ip"] = None      # stale fixed IP from an old subnet; not in use
         if rec.get("gateway") and not ipcalc.in_subnet(rec["gateway"], net):
-            raise StoreError("Gateway must be inside the network's subnet")
+            raise StoreError("Gateway must be inside the network")
         return rec
 
     def create_node(self, kind: str, parent_id: int | None, data: dict) -> dict:
@@ -217,11 +248,15 @@ class Store:
         clean = self._validate(cur["kind"], cur["parent_id"], data)
         if cur["kind"] == "network":
             merged = {**cur, **clean}
-            if "subnet" in clean and clean.get("subnet") != cur["subnet"] and \
-                    "range_start" not in data:
-                merged["range_start"] = merged["range_end"] = None
+            if "subnet" in clean and "range_start" not in data:
+                try:
+                    changed = str(ipcalc.parse_subnet(clean["subnet"] or "")) != cur["subnet"]
+                except ValueError:
+                    changed = True
+                if changed:              # new network, no range given: auto-fill it again
+                    merged["range_start"] = merged["range_end"] = None
             merged = self._validate_network(merged)
-            for k in ("subnet", "range_start", "range_end"):
+            for k in ("subnet", "range_start", "range_end", "addr_mode", "fixed_ip", "alloc"):
                 clean[k] = merged[k]
         if not clean:
             return cur

@@ -52,3 +52,24 @@ def valid_ip(text: str | None) -> bool:
         return True
     except ValueError:
         return False
+
+
+def expand(text: str | None, net: ipaddress.IPv4Network) -> str:
+    """Expand shorthand to a full address inside `net`: '35' / '.35' → x.y.z.35, '3.35' → x.y.3.35.
+
+    A full address is returned as it is. Raises ValueError for anything else.
+    """
+    t = (text or "").strip().lstrip(".")
+    if not t:
+        return ""
+    if valid_ip(t):
+        return t
+    parts = t.split(".")
+    if len(parts) > 3 or not all(p.isdigit() and int(p) <= 255 for p in parts):
+        raise ValueError(f"'{text}' isn't an address")
+    base = str(net.network_address).split(".")
+    return ".".join(base[:4 - len(parts)] + [str(int(p)) for p in parts])
+
+
+def first_host(net: ipaddress.IPv4Network) -> str:
+    return str(ipaddress.IPv4Address(int(net.network_address) + 1))

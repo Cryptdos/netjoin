@@ -118,7 +118,8 @@ def node_detail(req, data):
     out = {**n, "path": s.path_names(nid)}
     if n["kind"] == "network":
         out["resolved"] = s.resolve_gateway_dns(nid)
-        out["next_ip"] = eng().next_ip(n)
+        nx = eng().next_ip(n)
+        out["next_ip"], out["next_how"] = nx["ip"], nx["how"]
         out["last_worked"] = s.last_worked_ip(nid)
         out["last_internet"] = s.last_internet(nid)
         out["history"] = s.ip_history(nid)

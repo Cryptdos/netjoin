@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import random
 import threading
 from typing import Any
 
 from . import inet, ipcalc
 from .eventlog import EventLog
 from .netcfg import Adapter, Backend, NetError
-from .store import Store
+from .store import ALLOC_ORDERS, Store
 
 MAX_ATTEMPTS = 10
 
@@ -61,25 +62,43 @@ class Engine:
 
     # ---------- join ----------
     def candidates(self, network: dict, explicit_ip: str | None = None) -> list[str]:
+        """Addresses Join will try, in order (address mode + allocation order, plan items 5 and 6)."""
         net = ipcalc.parse_subnet(network["subnet"])
         if explicit_ip:
             if not ipcalc.in_subnet(explicit_ip, net):
                 raise JoinError(f"{explicit_ip} isn't a usable address in {net}")
             return [explicit_ip]
+        if (network.get("addr_mode") or "range") == "fixed" and network.get("fixed_ip"):
+            return [network["fixed_ip"]]
         allowed = list(ipcalc.iter_range(network["range_start"], network["range_end"], net))
-        order = []
-        last = self.store.last_worked_ip(network["id"])
-        if last and last in allowed:          # reuse the last good address only if it's still in the range
-            order.append(last)
-        order.extend(ip for ip in allowed if ip not in order)
-        return order
+        alloc = network.get("alloc") or "first"
+        if alloc == "last":
+            return allowed[::-1]
+        if alloc == "random":
+            random.shuffle(allowed)
+            return allowed
+        if alloc == "sticky":
+            last = self.store.last_worked_ip(network["id"])
+            if last and last in allowed:      # last good address first, if it's still in the range
+                return [last] + [ip for ip in allowed if ip != last]
+        return allowed
 
-    def next_ip(self, network: dict) -> str | None:
+    def next_ip(self, network: dict) -> dict:
+        """What the 'Next IP on Join' tile shows: {'ip', 'how'}."""
+        mode = network.get("addr_mode") or "range"
+        if mode == "fixed":
+            return {"ip": network.get("fixed_ip"), "how": "fixed IP"}
+        alloc = network.get("alloc") or "first"
+        if alloc == "random":
+            return {"ip": None, "how": "random from the range"}
         try:
             c = self.candidates(network)
         except Exception:
-            return None
-        return c[0] if c else None
+            return {"ip": None, "how": ""}
+        how = ALLOC_ORDERS.get(alloc, alloc)
+        if alloc == "sticky":
+            how = "last used" if c and c[0] == self.store.last_worked_ip(network["id"]) else "first free"
+        return {"ip": c[0] if c else None, "how": how}
 
     def _snapshot(self, a: Adapter) -> dict:
         p = a.primary
@@ -144,7 +163,13 @@ class Engine:
                                  f"(e.g. use the gateway {gwdns['gateway']})" if gwdns["gateway"] else chk["detail"], "warn")
                 return {"ok": True, "ip": cand, "prefix": net.prefixlen, "internet": internet, "attempts": tried}
             # Nothing worked: put the adapter back how it was.
-            if ip:
+            fixed = not ip and (network.get("addr_mode") or "range") == "fixed"
+            if fixed:
+                fip = network["fixed_ip"]
+                what, msg = (f"Fixed IP {fip} is in use by another device",
+                             f"{fip} is in use by another device – check with site IT. NetJoin doesn't pick "
+                             "another address for a fixed IP.")
+            elif ip:
                 what, msg = f"{ip} is in use by another device", f"{ip} is in use by another device. Try Join to pick a free address."
             else:
                 what, msg = f"No free address found after {tried} tries", f"Every address tried clashed ({tried} tries). Check the allowed range."

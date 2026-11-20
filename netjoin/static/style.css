@@ -266,3 +266,14 @@ table.dev td.small{min-width:110px}
   .log-head{min-height:30px;padding:4px 16px}
   .log-list{max-height:84px;padding:0 16px 6px}
 }
+
+/* ---------- v0.6 network editor ---------- */
+.netrow{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:10px;align-items:end}
+.three{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;align-items:end}
+.preview{margin:0;color:var(--muted)}
+.preview.ok{color:var(--accent-d)}
+.preview.bad,#rangePreview.bad{color:var(--err)}
+.mode-block{display:flex;flex-direction:column;gap:6px;padding:0 0 4px 26px}
+.mode-block[aria-disabled="true"]{opacity:.5}
+dialog select{height:36px}
+@media (max-width:600px){.netrow,.three{grid-template-columns:1fr}}

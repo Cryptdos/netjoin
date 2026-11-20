@@ -91,18 +91,37 @@
     <input type="hidden" name="id"><input type="hidden" name="kind"><input type="hidden" name="parent_id">
     <label>Name <input name="name" required autocomplete="off"></label>
     <div class="net-only">
-      <label>Subnet <input name="subnet" placeholder="10.20.5.0/24" class="mono" autocomplete="off"></label>
-      <div class="two">
-        <label>Allowed range from <input name="range_start" class="mono" placeholder="auto (.200)" autocomplete="off"></label>
-        <label>to <input name="range_end" class="mono" placeholder="auto (.254)" autocomplete="off"></label>
+      <div class="netrow">
+        <label>IP on this network <input name="net_ip" class="mono" placeholder="a controller's IP, or the network address" autocomplete="off" spellcheck="false"></label>
+        <label>Mask <select name="net_mask" class="mono"></select></label>
       </div>
+      <p class="small preview" id="netPreview" aria-live="polite">Type any IP on the network (e.g. from the drawings) and pick the mask. Pasting 10.20.5.0/24 works too.</p>
+      <fieldset>
+        <legend>Laptop address</legend>
+        <label class="check"><input type="radio" name="addr_mode" value="range" checked> From the allowed range</label>
+        <div class="mode-block" data-mode="range">
+          <div class="three">
+            <label>From <input name="range_start" class="mono" autocomplete="off" spellcheck="false"></label>
+            <label>To <input name="range_end" class="mono" autocomplete="off" spellcheck="false"></label>
+            <label>Order <select name="alloc">
+              <option value="first">First free</option><option value="last">Last free</option>
+              <option value="random">Random</option><option value="sticky">Last used, then first</option></select></label>
+          </div>
+          <p class="small muted" id="rangePreview">Addresses NetJoin may give this laptop – pick a block the site doesn't use. Type 35 or .35 for short.</p>
+        </div>
+        <label class="check"><input type="radio" name="addr_mode" value="fixed"> Fixed IP (given to you by the site)</label>
+        <div class="mode-block" data-mode="fixed">
+          <label>Fixed IP <input name="fixed_ip" class="mono" autocomplete="off" spellcheck="false"></label>
+          <p class="small muted">Join always uses this address. If another device has it, Join stops instead of picking another.</p>
+        </div>
+      </fieldset>
     </div>
     <fieldset>
       <legend>Gateway / DNS override</legend>
       <p class="small muted">Off = inherit from the level above (default: none). Leave a field blank with the box ticked to force none.</p>
       <label class="check"><input type="checkbox" name="gw_override"> Override gateway</label>
       <div class="two"><label>Gateway <input name="gateway" class="mono" autocomplete="off"></label>
-        <div class="suggest"><button type="button" class="btn small" id="suggestGw">Suggest .1</button></div></div>
+        <div class="suggest"><button type="button" class="btn small" id="suggestGw">Suggest gateway</button></div></div>
       <label class="check"><input type="checkbox" name="dns_override"> Override DNS</label>
       <div class="two"><label>DNS servers (comma separated) <input name="dns" class="mono" autocomplete="off"></label>
         <div class="suggest"><button type="button" class="btn small" id="dnsFromGw" title="Most routers also answer DNS">Use gateway</button></div></div>
