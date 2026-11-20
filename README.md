@@ -15,6 +15,8 @@ Design notes: [docs/network-join-tool.md](docs/network-join-tool.md)
 
 **Phase 3 (v0.3.0):** **Discover networks on the wire** – plug into an unknown BMS network, listen and broadcast a BACnet Who-Is, and NetJoin works out the subnet(s), the likely gateway and a free laptop range, then saves the network and joins it. Build script now produces a ready-to-share zip.
 
+**v0.6.0 (branch `v0.6`, being tested):** network editor with IP Network + mask, allowed range or static IP, allocation order (first / last / random / last used); Discover fixes for quiet BACnet-only networks and DHCP masks; adapter followed by MAC (USB dongles); device roll-up on sites and areas with search, sorting, filters, inactive devices and CSV export; per-site export / import; clickable breadcrumbs, hideable Sites list, IP history drop-down. Details: [docs/v0.6-plan.md](docs/v0.6-plan.md).
+
 **Phase 4 (v0.4.0):** works in narrow windows – split-screen, small browser windows, down to phone width. Device list switches to cards when its panel is narrow. Discover offers **Join & scan** for networks found from another subnet.
 
 ## Quick start (from source)
@@ -26,7 +28,7 @@ Design notes: [docs/network-join-tool.md](docs/network-join-tool.md)
    cd netjoin
    run.bat --fake
    ```
-   `--fake` is **demo mode**: a pretend set of adapters, nothing on your PC changes. Addresses ending .200 and .230 act as "already taken" so you can see the clash handling.
+   `--fake` is **demo mode**: a pretend set of adapters, nothing on your PC changes. Addresses ending .200 and .230 act as "already taken" so you can see the clash handling. Set `NETJOIN_FAKE_GONE=11` before starting to make the demo controller at .11 "unplugged" and see inactive devices.
 3. For real use: `run.bat` (Windows asks for admin, which is needed to change IP settings).
 
 Other options: `--port 8766`, `--no-browser`, `--no-elevate`, `--console` (run in a console window instead of the taskbar icon).
