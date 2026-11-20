@@ -158,7 +158,7 @@ def analyse(obs: dict, own_ip: str, known_subnets: dict[str, list[dict]] | None 
 
 
 def run(prober, adapter: str, src_ip: str, seconds: float, send_whois: bool, use_npcap: bool,
-        cancel, log, progress) -> dict:
+        cancel, log, progress, prefix: int | None = None, mac: str | None = None) -> dict:
     """Collect observations for `seconds`. Returns the raw observation dict."""
     from . import npcap
     if prober.kind == "fake":
@@ -172,17 +172,29 @@ def run(prober, adapter: str, src_ip: str, seconds: float, send_whois: bool, use
     sniff_result: dict = {}
     t = None
     if use_npcap:
-        t = threading.Thread(target=lambda: sniff_result.update(
-            npcap.passive_listen(adapter, src_ip, seconds, cancel, broad=True)), daemon=True)
+        def listen():
+            try:
+                sniff_result.update(npcap.passive_listen(adapter, src_ip, seconds, cancel, broad=True, mac=mac))
+            except Exception as e:      # report it rather than silently hearing nothing
+                sniff_result["error"] = str(e)
+        t = threading.Thread(target=listen, daemon=True)
         t.start()
         time.sleep(1.0)    # let the capture start before we send anything
     t0 = time.monotonic()
     if send_whois and not cancel():
-        obs["bacnet"].extend(_who_is_any(src_ip, min(seconds, 5.0), cancel, log))
+        targets = ["255.255.255.255"]
+        if prefix and not src_ip.startswith("169.254."):
+            # Windows may send 255.255.255.255 out of a different adapter (Wi-Fi, Hyper-V, VPN).
+            # The adapter's own subnet broadcast is always routed out of this adapter.
+            targets.insert(0, str(ipaddress.IPv4Network(f"{src_ip}/{prefix}", strict=False).broadcast_address))
+        obs["whois_to"] = targets
+        obs["bacnet"].extend(_who_is_any(src_ip, min(seconds, 5.0), cancel, log, targets))
         progress(min(seconds, time.monotonic() - t0))
     while t is not None and t.is_alive():
         t.join(0.5)
         progress(min(seconds, time.monotonic() - t0 + 1))
+    if sniff_result.get("error"):
+        obs["npcap_error"] = sniff_result["error"]
     if sniff_result:
         obs["hosts"].update(sniff_result.get("hosts", {}))
         seen = {d["key"] for d in obs["bacnet"]}
@@ -192,14 +204,18 @@ def run(prober, adapter: str, src_ip: str, seconds: float, send_whois: bool, use
     return obs
 
 
-def _who_is_any(src_ip: str, listen: float, cancel, log) -> list[dict]:
-    """Who-Is to 255.255.255.255 only (we may not be on the devices' subnet); no name reads."""
+def _who_is_any(src_ip: str, listen: float, cancel, log, targets=("255.255.255.255",)) -> list[dict]:
+    """Who-Is to the given broadcast addresses (we may not be on the devices' subnet); no name reads."""
     sock, std = bacnet.open_socket(src_ip)
     if not std:
         log(f"UDP {bacnet.BACNET_PORT} is in use by another program; replies may be missed", "warn")
     found: dict[str, dict] = {}
     try:
-        sock.sendto(bacnet.WHO_IS, ("255.255.255.255", bacnet.BACNET_PORT))
+        for dst in targets:
+            try:
+                sock.sendto(bacnet.WHO_IS, (dst, bacnet.BACNET_PORT))
+            except OSError as e:
+                log(f"Who-Is to {dst} failed: {e}", "warn")
         end = time.monotonic() + listen
         while time.monotonic() < end and not cancel():
             sock.settimeout(max(0.05, min(0.3, end - time.monotonic())))

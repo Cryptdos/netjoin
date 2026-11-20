@@ -418,12 +418,19 @@ function renderDiscover(res) {
   const list = $("#discList");
   if (!res) { list.replaceChildren(); return; }
   $("#discSummary").textContent = `Finished ${res.finished} from ${res.adapter} (${res.src_ip})` +
-    (res.npcap ? " · listened with Npcap" : " · Who-Is only") ;
+    (res.npcap && !res.npcap_error ? " · listened with Npcap" : res.npcap_error ? " · Npcap failed" : " · no Npcap") +
+    (res.whois && res.whois_to && res.whois_to.length ? ` · Who-Is to ${res.whois_to.join(" and ")}` : "");
+  const notes = [];
+  if (res.npcap_error) notes.push(el("p", { class: "note-warn" }, `Npcap couldn't listen on this adapter, so only the BACnet Who-Is ran. ${res.npcap_error}`));
   if (!res.subnets.length) {
-    list.replaceChildren(el("div", { class: "empty" }, "Nothing heard. Check the cable and the adapter, try a longer listen, or install Npcap so NetJoin can hear traffic that isn't BACnet."));
+    const tip = res.npcap && !res.npcap_error
+      ? "Nothing heard. Check the cable and the adapter, or try a longer listen."
+      : res.npcap_error ? "Nothing answered the Who-Is either."
+      : "Nothing heard. Check the cable and the adapter, try a longer listen, or install Npcap so NetJoin can hear traffic that isn't BACnet.";
+    list.replaceChildren(...notes, el("div", { class: "empty" }, tip));
     return;
   }
-  list.replaceChildren(...res.subnets.map((r) => discCard(r)));
+  list.replaceChildren(...notes, ...res.subnets.map((r) => discCard(r)));
 }
 
 function discCard(r) {

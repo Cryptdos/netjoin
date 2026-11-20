@@ -54,24 +54,48 @@ def _load():
     return _scapy
 
 
-def _iface(sc, adapter_name: str, src_ip: str):
-    for iface in sc.conf.ifaces.values():
+def _norm_mac(mac) -> str:
+    return (mac or "").replace("-", ":").lower()
+
+
+def _iface(sc, adapter_name: str, src_ip: str, mac: str | None = None):
+    """Find Npcap's interface for this adapter, by name, IP or MAC.
+
+    scapy builds its interface list when it's first loaded. Adapters plugged in later
+    (USB dongles) or IPs changed by a Join aren't in it, so reload the list first.
+    """
+    try:
+        sc.conf.ifaces.reload()
+    except Exception:
+        pass
+
+    def matches(iface) -> bool:
         ips = getattr(iface, "ips", {}) or {}
-        if getattr(iface, "name", None) == adapter_name or src_ip in ips.get(4, []) or getattr(iface, "ip", None) == src_ip:
+        return (getattr(iface, "name", None) == adapter_name
+                or src_ip in (ips.get(4, []) or [])
+                or getattr(iface, "ip", None) == src_ip
+                or (bool(mac) and _norm_mac(getattr(iface, "mac", "")) == _norm_mac(mac)))
+
+    for iface in sc.conf.ifaces.values():
+        if matches(iface):
             return iface
-    raise RuntimeError(f"Npcap can't see adapter '{adapter_name}'")
+    seen = "; ".join(f"{getattr(i, 'name', '?')} [{getattr(i, 'ip', '') or '-'} {getattr(i, 'mac', '') or ''}]"
+                     for i in sc.conf.ifaces.values())
+    raise RuntimeError(f"Npcap can't see adapter '{adapter_name}' ({src_ip}, MAC {mac or '?'}). "
+                       f"Adapters Npcap can see: {seen or 'none'}")
 
 
-def arp_sweep(adapter_name: str, src_ip: str, cidr: str, timeout: float = 2.0) -> dict[str, str]:
+def arp_sweep(adapter_name: str, src_ip: str, cidr: str, timeout: float = 2.0, mac: str | None = None) -> dict[str, str]:
     """Raw ARP who-has for the whole subnet in one go → {ip: mac}."""
     sc = _load()
-    iface = _iface(sc, adapter_name, src_ip)
+    iface = _iface(sc, adapter_name, src_ip, mac)
     ans, _ = sc.srp(sc.Ether(dst="ff:ff:ff:ff:ff:ff") / sc.ARP(pdst=cidr, psrc=src_ip), iface=iface,
                     timeout=timeout, retry=1, inter=0.002)
     return {r.psrc: r.hwsrc.upper().replace(":", "-") for _s, r in ans}
 
 
-def passive_listen(adapter_name: str, src_ip: str, seconds: float, cancel, broad: bool = False) -> dict:
+def passive_listen(adapter_name: str, src_ip: str, seconds: float, cancel, broad: bool = False,
+                   mac: str | None = None) -> dict:
     """Listen without sending anything.
 
     → {'hosts': {ip: mac}, 'bacnet': [dev], 'broadcasts': {addr: count},
@@ -80,7 +104,7 @@ def passive_listen(adapter_name: str, src_ip: str, seconds: float, cancel, broad
     protocols...), which is what Discover uses to work out subnet masks.
     """
     sc = _load()
-    iface = _iface(sc, adapter_name, src_ip)
+    iface = _iface(sc, adapter_name, src_ip, mac)
     hosts: dict[str, str] = {}
     devs: dict[str, dict] = {}
     bcasts: dict[str, int] = {}

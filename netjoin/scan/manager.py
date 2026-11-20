@@ -82,6 +82,12 @@ class ScanManager:
         threading.Thread(target=self._run, args=(kind, a.name, p.ip, here), daemon=True).start()
         return self.status()
 
+    def _mac(self, adapter: str) -> str | None:
+        try:
+            return self.engine.adapter(adapter).mac or None
+        except Exception:
+            return None
+
     def npcap_ok(self) -> bool:
         return self.prober.kind == "windows" and npcap.status()["available"]
 
@@ -104,16 +110,19 @@ class ScanManager:
                           "adapter": a.name, "phase": "listening" if use_npcap else "BACnet Who-Is",
                           "done": 0, "total": seconds, "found": 0,
                           "started": datetime.now().strftime("%H:%M:%S"), "error": None}
-        threading.Thread(target=self._run_discover, args=(a.name, p.ip, seconds, send_whois, use_npcap),
+        threading.Thread(target=self._run_discover, args=(a.name, p.ip, p.prefix, seconds, send_whois, use_npcap),
                          daemon=True).start()
         return self.status()
 
-    def _run_discover(self, adapter, src_ip, seconds, send_whois, use_npcap):
+    def _run_discover(self, adapter, src_ip, prefix, seconds, send_whois, use_npcap):
         how = ("listening" + (" + BACnet Who-Is" if send_whois else "")) if use_npcap else "BACnet Who-Is only (no Npcap)"
         self.log.add(f"Discover on {adapter} ({src_ip}) for {seconds} s: {how}")
         try:
             obs = discover.run(self.prober, adapter, src_ip, seconds, send_whois, use_npcap,
-                               self._cancel.is_set, self.log.add, lambda d: self._set(done=int(d)))
+                               self._cancel.is_set, self.log.add, lambda d: self._set(done=int(d)),
+                               prefix=prefix, mac=self._mac(adapter))
+            if obs.get("npcap_error"):
+                self.log.add(f"Discover: Npcap listening failed – {obs['npcap_error']}", "error")
             self._set(phase="working out subnets", done=seconds)
             known: dict[str, list] = {}
             for n in self._all_networks():
@@ -121,6 +130,7 @@ class ScanManager:
                     {"id": n["id"], "name": n["name"], "path": " › ".join(self.store.path_names(n["id"]))})
             result = discover.analyse(obs, src_ip, known)
             self.discover_result = {"subnets": result, "npcap": use_npcap, "whois": send_whois,
+                                    "npcap_error": obs.get("npcap_error"), "whois_to": obs.get("whois_to", []),
                                     "src_ip": src_ip, "adapter": adapter,
                                     "finished": datetime.now().strftime("%H:%M:%S")}
             if self._cancel.is_set():
@@ -234,7 +244,7 @@ class ScanManager:
         if np["available"]:
             self._set(phase="ARP sweep (Npcap)", done=0, total=1)
             try:
-                hits = npcap.arp_sweep(adapter, src_ip, subnet)
+                hits = npcap.arp_sweep(adapter, src_ip, subnet, mac=self._mac(adapter))
                 for ip, mac in hits.items():
                     self.store.upsert_device(subnet, ip, ip, "arp", mac=mac)
                 self._set(done=1, found=len(hits))
@@ -293,13 +303,21 @@ class ScanManager:
         secs = 30
         self._set(phase=f"Passive listen ({secs} s, sending nothing)", done=0, total=secs)
         result: dict = {}
-        t = threading.Thread(target=lambda: result.update(
-            npcap.passive_listen(adapter, src_ip, secs, self._cancel.is_set)), daemon=True)
+        mac = self._mac(adapter)
+
+        def listen():
+            try:
+                result.update(npcap.passive_listen(adapter, src_ip, secs, self._cancel.is_set, mac=mac))
+            except Exception as e:
+                result["error"] = str(e)
+        t = threading.Thread(target=listen, daemon=True)
         t0 = time.monotonic()
         t.start()
         while t.is_alive():
             t.join(0.5)
             self._set(done=min(secs, int(time.monotonic() - t0)))
+        if result.get("error"):
+            raise ScanError(f"Passive listen failed: {result['error']}")
         for ip, mac in result.get("hosts", {}).items():
             try:
                 inside = ipaddress.IPv4Address(ip) in net

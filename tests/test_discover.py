@@ -39,3 +39,46 @@ class Analyse(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NpcapInterfaceMatching(unittest.TestCase):
+    """scapy isn't installed in CI; a stand-in for scapy.conf.ifaces checks the matching rules."""
+
+    def _sc(self, stale, fresh):
+        class Ifaces(dict):
+            def reload(self):
+                self.clear()
+                self.update(fresh)
+
+        class Conf:
+            ifaces = Ifaces(stale)
+
+        class SC:
+            conf = Conf()
+        return SC()
+
+    def _iface(self, name, ip, mac):
+        class I:
+            pass
+        i = I()
+        i.name, i.ip, i.ips, i.mac = name, ip, {4: [ip]}, mac
+        return i
+
+    def test_reload_finds_adapter_plugged_in_later(self):
+        from netjoin.scan.npcap import _iface
+        wifi = self._iface("WiFi", "192.168.3.95", "aa:bb:cc:00:00:01")
+        eth3 = self._iface("Ethernet 3", "10.110.102.200", "00:e0:4c:54:68:40")
+        sc = self._sc({"wifi": wifi}, {"wifi": wifi, "eth3": eth3})
+        self.assertIs(_iface(sc, "Ethernet 3", "10.110.102.200"), eth3)
+
+    def test_match_by_mac_when_name_and_ip_differ(self):
+        from netjoin.scan.npcap import _iface
+        odd = self._iface("\\\\Device\\\\NPF_{GUID}", "", "00:e0:4c:54:68:40")
+        sc = self._sc({}, {"x": odd})
+        self.assertIs(_iface(sc, "Ethernet 3", "10.110.102.39", mac="00-E0-4C-54-68-40"), odd)
+
+    def test_error_lists_what_npcap_sees(self):
+        from netjoin.scan.npcap import _iface
+        sc = self._sc({}, {"w": self._iface("WiFi", "192.168.3.95", "aa:bb")})
+        with self.assertRaisesRegex(RuntimeError, "Adapters Npcap can see: WiFi"):
+            _iface(sc, "Ethernet 3", "10.110.102.39")
