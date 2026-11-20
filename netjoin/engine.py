@@ -126,7 +126,7 @@ class Engine:
         return allowed
 
     def next_ip(self, network: dict) -> dict:
-        """What the 'Next IP on Join' tile shows: {'ip', 'how'}."""
+        """What the 'Join IP' fact shows: the address Join tries first and how it was picked: {'ip', 'how'}."""
         mode = network.get("addr_mode") or "range"
         if mode == "fixed":
             return {"ip": network.get("fixed_ip"), "how": "static IP"}

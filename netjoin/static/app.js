@@ -48,7 +48,8 @@ function defaultRange(nw) {
 }
 const maskLabel = (p) => `${ip4.str(ip4.mask(p))}  (/${p})`;
 // The part of an address that changes inside a network: ".35" on a /24, "3.35" on a /22, "5.3.35" on a /14.
-function shortIp(ip, prefix) { const parts = String(ip).split("."); const keep = prefix >= 24 ? 1 : prefix >= 16 ? 2 : 3; return "." + parts.slice(4 - keep).join("."); }
+// The host part only: 10.110.102.200 on a /24 → "200"; on a /16 → "102.200"
+function shortIp(ip, prefix) { const parts = String(ip).split("."); const keep = prefix >= 24 ? 1 : prefix >= 16 ? 2 : 3; return parts.slice(4 - keep).join("."); }
 
 // ---------- helpers ----------
 function el(tag, attrs = {}, ...kids) {
@@ -272,12 +273,13 @@ async function refreshDetail() {
   box.replaceChildren(
     el("div", { class: "tiles" },
       tile("Network", nw ? `${ip4.str(nw.net)}/${nw.prefix}` : d.subnet, nw ? nw.mask : null, nw ? `${netText(d.subnet)} · usable ${ip4.str(nw.first)} – ${ip4.str(nw.last)}` : null),
-      d.addr_mode === "fixed"
-        ? tile("Laptop address", d.fixed_ip || "—", "static IP")
-        : tile("Laptop address", `${shortIp(d.range_start, pfx)} – ${shortIp(d.range_end, pfx)}`, ALLOC_TEXT[d.alloc] || "first free", `${d.range_start} – ${d.range_end}`),
       tile("Gateway / DNS", `${r.gateway || "—"} / ${r.dns.length ? r.dns.join(", ") : "—"}`,
         r.gateway_from || r.dns_from ? `from ${[r.gateway_from, r.dns_from].filter(Boolean).join(" · ")}` : "none set"),
-      tile("Next IP", d.next_ip || (d.next_how === "random from the range" ? "random" : "—"), d.next_how || null)),
+      // The address Join will try first, and how it was picked; the allowed range is in the tooltip.
+      tile("Join IP", d.next_ip || (d.next_how === "random from the range" ? "random" : "none free"),
+        d.addr_mode === "fixed" ? "static IP" : (d.next_how || null),
+        d.addr_mode === "fixed" ? "Static IP – Join always uses this address"
+          : `Join tries this address first. Allowed range ${shortIp(d.range_start, pfx)} – ${shortIp(d.range_end, pfx)} (${d.range_start} – ${d.range_end}), ${ALLOC_TEXT[d.alloc] || "first free"}.`)),
     ...(d.notes ? [el("p", { class: "notes", title: d.notes }, "Notes: ", d.notes.replace(/\s*\n\s*/g, " · "))] : []));
   renderHistory();
 }
