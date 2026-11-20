@@ -385,7 +385,7 @@ async function renderHome() {
     ...kv("NetJoin", `${st.version || ""}${st.backend === "fake" ? " (demo mode)" : ""}`));
 
   // Sites
-  const sites = h.sites.length ? el("div", { class: "contents" }, h.sites.map((x) => el("button", { type: "button", class: "ccard", onclick: () => goTo(x.id) },
+  const sites = h.sites.length ? el("div", { class: "site-cards" }, h.sites.map((x) => el("button", { type: "button", class: "ccard", onclick: () => goTo(x.id) },
     el("span", { class: "k" }, "Site"), el("span", { class: "nm" }, x.name),
     el("span", { class: "meta" }, `${x.networks} network${x.networks === 1 ? "" : "s"} · ${x.devices} device${x.devices === 1 ? "" : "s"} · ${x.bacnet} BACnet`),
     el("span", { class: "meta" }, x.last_join ? `Last joined ${ago(x.last_join)}` : "Not joined yet"),
@@ -1130,9 +1130,27 @@ $("#suggestGw").addEventListener("click", () => {
   f.gateway.value = ip4.str(nw.first);      // network + 1, e.g. 192.168.0.1 on a /22
 });
 
+// ---------- theme: system / light / dark, saved in NetJoin's settings and cached for a flash-free start ----------
+const darkMq = window.matchMedia ? matchMedia("(prefers-color-scheme: dark)") : null;
+let themeChoice = "system";
+function applyTheme(choice) {
+  themeChoice = choice || "system";
+  const dark = themeChoice === "dark" || (themeChoice === "system" && darkMq && darkMq.matches);
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  try { localStorage.setItem("netjoin-theme", themeChoice); } catch (e) {}
+  for (const r of document.querySelectorAll('#themeSeg input')) r.checked = r.value === themeChoice;
+}
+if (darkMq) darkMq.addEventListener("change", () => { if (themeChoice === "system") applyTheme("system"); });
+$("#themeSeg").addEventListener("change", async (e) => {
+  applyTheme(e.target.value);
+  try { await api("/settings/ui", { method: "PUT", body: { theme: themeChoice } }); }
+  catch (err) { $("#settingsErr").textContent = err.message; }
+});
+
 // ---------- settings ----------
 $("#settingsBtn").addEventListener("click", async () => {
   const f = $("#settingsForm"); $("#settingsErr").textContent = "";
+  applyTheme(themeChoice);
   const g = await api("/settings/global");
   f.gw_override.checked = !!g.gw_override; f.gateway.value = g.gateway || "";
   f.dns_override.checked = !!g.dns_override; f.dns.value = g.dns || "";
@@ -1216,6 +1234,7 @@ $("#rejoinBtn").addEventListener("click", (e) => withBusy(e.currentTarget, async
   await refreshStatus(); await refreshTree(); await refreshDetail(); }));
 
 (async function init() {
+  try { applyTheme((await api("/settings/ui")).theme); } catch (e) { try { applyTheme(localStorage.getItem("netjoin-theme")); } catch (e2) {} }
   await refreshStatus(); await refreshAdapters(); await refreshTree();
   try { state.scan = await api("/scan"); } catch (e) {}
   await refreshDetail(); await refreshLog(); if (state.scan.running) pollScan();

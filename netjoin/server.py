@@ -252,6 +252,21 @@ def put_global(req, data):
     return g
 
 
+THEMES = ("system", "light", "dark")
+
+
+def get_ui(req, data):
+    return {"theme": eng().store.get_setting("theme", "system")}
+
+
+def put_ui(req, data):
+    theme = data.get("theme")
+    if theme not in THEMES:
+        raise StoreError("Theme must be system, light or dark")
+    eng().store.set_setting("theme", theme)
+    return {"theme": theme}
+
+
 def export(req, data):
     from datetime import date
     import re
@@ -316,6 +331,8 @@ def build_app(engine: Engine, port: int, scans: ScanManager) -> Starlette:
         Route("/api/log", api(log)),
         Route("/api/settings/global", api(get_global)),
         Route("/api/settings/global", api(put_global), methods=["PUT"]),
+        Route("/api/settings/ui", api(get_ui)),
+        Route("/api/settings/ui", api(put_ui), methods=["PUT"]),
         Route("/api/export", api(export)),
         Route("/api/import", api(import_), methods=["POST"]),
         Mount("/static", StaticFiles(directory=str(paths.static_dir())), name="static"),

@@ -5,6 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NetJoin</title>
 <link rel="icon" type="image/png" href="/static/favicon.png">
+<script>
+  // Apply the last theme straight away so a dark screen doesn't flash white while the app loads.
+  try { var t = localStorage.getItem("netjoin-theme") || "system";
+    if (t === "system") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -160,6 +166,15 @@
 <dialog id="settingsDlg">
   <form method="dialog" id="settingsForm">
     <h2>Settings</h2>
+    <fieldset>
+      <legend>Appearance</legend>
+      <div class="seg" role="radiogroup" aria-label="Theme" id="themeSeg">
+        <label><input type="radio" name="theme" value="system"> System</label>
+        <label><input type="radio" name="theme" value="light"> Light</label>
+        <label><input type="radio" name="theme" value="dark"> Dark</label>
+      </div>
+      <p class="small muted">System follows Windows' light / dark setting. Changes straight away.</p>
+    </fieldset>
     <fieldset>
       <legend>Global gateway / DNS</legend>
       <p class="small muted">Used by every network unless a site, area or network overrides it. Default is none, so Wi-Fi keeps your internet.</p>
