@@ -349,6 +349,30 @@ class Store:
             "GROUP BY ip) x ON h.id=x.mid ORDER BY h.id DESC LIMIT ?", (network_id, limit)).fetchall()
         return [dict(r) for r in rows]
 
+    def recent_history(self, limit: int = 20) -> list[dict]:
+        """Across every network: one row per network + IP (its latest outcome), newest first,
+        with the network's name and path so a single History list can say where each was."""
+        nodes = {r["id"]: dict(r) for r in self.db.execute("SELECT id, parent_id, name, kind, subnet FROM nodes")}
+
+        def path(nid):
+            out = []
+            while nid is not None and nid in nodes:
+                out.append(nodes[nid]["name"])
+                nid = nodes[nid]["parent_id"]
+            return " › ".join(reversed(out))
+        rows = self.db.execute(
+            "SELECT h.* FROM history h JOIN (SELECT network_id, ip, MAX(id) mid FROM history "
+            "WHERE network_id IS NOT NULL GROUP BY network_id, ip) x ON h.id=x.mid ORDER BY h.id DESC LIMIT ?",
+            (limit,)).fetchall()
+        out = []
+        for r in rows:
+            n = nodes.get(r["network_id"])
+            if not n:
+                continue
+            parent = path(n["parent_id"]) if n["parent_id"] is not None else ""
+            out.append({**dict(r), "network": n["name"], "where": parent, "subnet": n["subnet"]})
+        return out
+
     def last_worked_ip(self, network_id: int) -> str | None:
         row = self.db.execute("SELECT ip FROM history WHERE network_id=? AND result='worked' "
                               "ORDER BY id DESC LIMIT 1", (network_id,)).fetchone()

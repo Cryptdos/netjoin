@@ -387,22 +387,35 @@ body.at-home .lower{display:none}
 .netlink{border:0;background:none;padding:0;font:inherit;color:var(--accent-d);cursor:pointer;text-decoration:underline;text-decoration-color:var(--accent-line);text-underline-offset:2px}
 .netlink:hover,.netlink:focus-visible{text-decoration-color:currentColor}
 
-/* ---------- v0.8 one top bar: app + page ----------
-   [☰ NetJoin] [crumbs ............] [● adapter ▾ ip · mode · network  🌐] [DHCP] [⚙]
-               [Title .............] [page buttons ..........................]          */
-.topbar{display:grid;grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"brand crumbs global" "brand title actions";
-  align-items:center;gap:6px 20px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line);position:relative;z-index:30}
-.tb-brand{grid-area:brand;display:flex;align-items:center;gap:12px;align-self:stretch;padding-right:20px;border-right:1px solid var(--line2)}
-.tb-crumbs{grid-area:crumbs;min-width:0}
-.tb-title{grid-area:title;min-width:0}
-.tb-title h1{font-size:22px;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tb-global{grid-area:global;display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0}
-.tb-actions{grid-area:actions;display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px;min-width:0}
+/* ---------- v0.8 one top bar: app + page, on one line ----------
+   [☰ NetJoin] [… › Area › Network (title) ......] [page buttons] │ [● adapter ▾ ip · mode · net 🌐] [History ▾] [DHCP] [⚙]   */
+.topbar{display:grid;grid-template-columns:auto minmax(120px,1fr) auto auto;grid-template-areas:"brand crumbs actions global";
+  align-items:center;gap:8px 16px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line);position:relative;z-index:30}
+.tb-brand{grid-area:brand;display:flex;align-items:center;gap:12px;align-self:stretch;padding-right:16px;border-right:1px solid var(--line2)}
+.tb-global{grid-area:global;display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0;padding-left:16px;border-left:1px solid var(--line2)}
+.tb-actions{grid-area:actions;display:flex;flex-wrap:nowrap;align-items:center;justify-content:flex-end;gap:8px;min-width:0}
 .tb-actions:empty{display:none}
 .tb-global .btn-strong{height:36px}
 .topbar .btn.icon{flex:none}
 .demo-badge{font:600 10px/1 var(--mono);letter-spacing:.06em;padding:3px 6px;border-radius:4px;background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-line)}
 .demo-badge[hidden]{display:none}
+.inet-pill{white-space:nowrap}
+.tb-crumbs{grid-area:crumbs;min-width:0;align-self:center}
+/* One line; the last crumb is the page title. fitCrumbs() folds the first levels into "…" when it won't fit. */
+.tb-crumbs .crumbs{display:flex;flex-wrap:nowrap;align-items:baseline;overflow:hidden;min-width:0;gap:2px}
+.tb-crumbs .cgrp{display:inline-flex;align-items:baseline;gap:2px;flex:none;min-width:0}
+.tb-crumbs .cgrp[hidden]{display:none}
+.tb-crumbs .cgrp:last-child{flex:0 1 auto;overflow:hidden}
+.tb-crumbs .crumbs.measuring .cgrp:last-child{flex:none}
+.tb-crumbs .crumb-here{margin:0 0 0 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;display:block;font-size:22px;line-height:1.25;font-weight:650;letter-spacing:-.01em;color:var(--text);padding:0 4px;cursor:default}
+.tb-crumbs .crumb-here:hover{background:none}
+.tb-crumbs .crumb-here svg{width:18px;height:18px;margin-right:4px;vertical-align:-2px}
+.tb-crumbs .crumb:not(.crumb-here),.tb-crumbs .sep{font-size:13px;white-space:nowrap}
+.tb-crumbs .crumb-menu{font-size:12px;align-self:center;flex:none}
+.crumb-more{flex:none;align-self:center;border:0;background:none;font:inherit;font-size:13px;color:var(--accent-d);cursor:pointer;padding:2px 6px;border-radius:4px;white-space:nowrap}
+.crumb-more::after{content:"›";margin-left:8px;color:var(--muted)}
+.crumb-more:hover,.crumb-more[aria-expanded="true"]{background:var(--hover)}
+.crumb-more[hidden]{display:none}
 
 /* connection chip */
 .conn{position:relative;display:flex;align-items:center;min-width:0;height:36px;border:1px solid var(--line);border-radius:6px;background:var(--bg)}
@@ -424,21 +437,53 @@ body.at-home .lower{display:none}
 
 /* page content under the bar */
 body.at-home #detail{display:none}
-#detail .roll-stats{margin:0}
-#detail .contents{margin-top:10px;padding-top:0;border-top:0}
-#detail .tiles{margin-top:0}
 
-/* narrower windows: the chip text gives way first, then the bar stacks */
-@media (max-width: 1280px){ .current .inet-t{display:none} }
+/* Narrower windows: things give way in this order, so the bar stays on one line as long as possible */
+@media (max-width: 1680px){ .inet-pill .pill-t{display:none} .inet-pill{padding:0 8px;height:30px} }
+@media (max-width: 1440px){ #dhcpBtn .long{display:none} }
+@media (max-width: 1366px){ .current .inet-t{display:none} }
+@media (max-width: 1280px){ .brand .logo{display:none} }
+@media (max-width: 1150px){ .current .cur-mode{display:none} }
 @media (max-width: 1100px){
-  .topbar{grid-template-columns:auto minmax(0,1fr);grid-template-areas:"brand global" "crumbs crumbs" "title actions"}
-  .tb-brand{border-right:0;padding-right:0}
-}
-@media (max-width: 700px){
-  .topbar{grid-template-columns:minmax(0,1fr);grid-template-areas:"brand" "global" "crumbs" "title" "actions";padding:10px 12px}
-  .tb-global{flex-wrap:wrap;justify-content:stretch}
-  .conn{flex:1 1 100%}
-  .tb-global #dhcpBtn{flex:1 1 auto}
+  .topbar{grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"brand crumbs crumbs" "actions actions global"}
+  .current .cur-mode{display:inline}
   .tb-actions{justify-content:flex-start}
-  .tb-title h1{font-size:20px;white-space:normal}
 }
+@media (max-width: 640px){
+  .topbar{grid-template-columns:minmax(0,1fr);grid-template-areas:"brand" "crumbs" "global" "actions";padding:10px 12px}
+  .tb-brand{border-right:0;padding-right:0}
+  .tb-global{padding-left:0;border-left:0;flex-wrap:wrap}
+  .conn{flex:1 1 100%}
+  .tb-actions{flex-wrap:wrap}
+  .brand .logo{display:inline}
+  .tb-crumbs .crumb-here{font-size:20px}
+}
+/* v0.8 History in the top bar: one list for every network */
+.tb-global #histMenu .menu-list{width:min(520px,94vw);right:0;left:auto}
+.hist li.here button{border-color:var(--accent-line);background:var(--accent-hover-bg)}
+.hist .hnet{display:flex;flex-direction:column;min-width:0;flex:1 1 auto}
+.hist .hnet .nm{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hist .hnet .where{font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hist .inet-gap{width:14px;flex:none}
+.hist .when{flex:none;min-width:44px;text-align:right}
+/* This PC refresh */
+.hcard-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.btn.icon.small.refresh{width:30px;height:30px;color:var(--muted)}
+.btn.icon.small.refresh:hover{color:var(--text)}
+.tb-global .hist .ip{flex:none}
+
+/* v0.8 page facts strip: attached under the top bar instead of a separate panel */
+.topbar:has(+ .tb-sub:not(:empty)){border-bottom-color:var(--line2)}
+.tb-sub{flex:none;background:var(--panel);border-bottom:1px solid var(--line);padding:8px 16px 9px;display:flex;flex-direction:column;gap:8px;position:relative;z-index:29}
+.tb-sub:empty,body.at-home .tb-sub{display:none}
+.tb-sub .tiles{display:flex;flex-wrap:wrap;gap:4px 0;margin:0}
+.tb-sub .tile{flex-direction:row;align-items:baseline;gap:8px;padding:2px 20px 2px 0;margin-right:20px;background:none;border-right:1px solid var(--line2);border-radius:0;min-width:0}
+.tb-sub .tile:last-child{border-right:0;margin-right:0}
+.tb-sub .tile .k{font-size:11px;text-transform:uppercase;letter-spacing:.04em;font-weight:600}
+.tb-sub .tile .v{font-size:13px;white-space:nowrap}
+.tb-sub .tile .from{font-size:11px;white-space:nowrap}
+.tb-sub .roll-stats{margin:0;font-size:13px}
+.tb-sub .contents{margin:0;padding:0;border:0;max-height:72px;overflow-y:auto;gap:6px}
+.tb-sub .ccard{padding:4px 10px;font-size:13px}
+.tb-sub .notes{margin:0;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media (max-width: 640px){ .tb-sub{padding:8px 12px} .tb-sub .tile{border-right:0;margin-right:0;padding-right:0;flex:1 1 100%} .tb-sub .tile .v{white-space:normal} }

@@ -149,9 +149,6 @@ async function refreshStatus() {
     dh.disabled = !s.adapter || already;
     dh.title = !s.adapter ? "Pick an adapter first" : already ? `${s.adapter.name} is already on DHCP` : `Set ${s.adapter.name} back to DHCP`;
   }
-  const rj = $("#rejoinBtn");
-  if (s.last_network && !s.joined) { rj.hidden = false; rj.textContent = `Rejoin ${s.last_network.network}`; rj.title = s.last_network.path || ""; }
-  else rj.hidden = true;
   if (!s.admin && !refreshStatus.adminWarned) {
     refreshStatus.adminWarned = true;
     flash("NetJoin isn't running as administrator, so Join and DHCP won't work. Quit it and start it again, accepting the Windows prompt.", "error", { sticky: true, key: "admin" });
@@ -223,11 +220,22 @@ function joinedLink(j) {
 
 // ---------- page head: crumbs, title and page buttons live in the top bar ----------
 function setHead(crumbs, title, actions) {
-  $("#tbCrumbs").replaceChildren(crumbs);
-  $("#tbTitle").replaceChildren(el("h1", { title }, title));
+  $("#tbCrumbs").replaceChildren(crumbs);       // the last crumb is the page title
   $("#tbActions").replaceChildren(...actions.filter(Boolean));
   document.title = title === "Home" ? "NetJoin" : `${title} – NetJoin`;
+  fitCrumbs();
 }
+// Keep the trail on one line: fold levels from the top (Home, then the site…) into "…" until it fits.
+// The current page is never folded; if it still doesn't fit, its name is cut short with an ellipsis.
+function fitCrumbs() {
+  const nav = $("#tbCrumbs .crumbs"); if (!nav) return;
+  const groups = [...nav.querySelectorAll(":scope > .cgrp")]; const more = nav.querySelector(":scope > .crumb-more");
+  groups.forEach((g) => { g.hidden = false; }); more.hidden = true;
+  nav.classList.add("measuring");               // title at full width while deciding what to fold
+  for (let i = 0; i < groups.length - 1 && nav.scrollWidth > nav.clientWidth + 1; i++) { groups[i].hidden = true; more.hidden = false; }
+  nav.classList.remove("measuring");
+}
+if (window.ResizeObserver) new ResizeObserver(() => fitCrumbs()).observe($("#tbCrumbs"));
 
 // ---------- detail ----------
 async function refreshDetail() {
@@ -251,39 +259,62 @@ async function refreshDetail() {
       el("div", { class: "contents", id: "contents", "aria-label": `Inside ${d.name}` }));
     renderContents(); renderHistory(); return;
   }
-  const inetPill = d.last_internet == null ? el("span", { class: "pill" }, "Internet: not checked yet")
-    : el("span", { class: "pill" + inetInfo(d.last_internet).cls }, globe(inetInfo(d.last_internet).off),
-        { 1: "Had internet at last join", 2: "Internet by IP only (no DNS) at last join", 0: "No internet at last join" }[d.last_internet] || "No internet at last join");
+  const inetText = d.last_internet == null ? "Internet not checked yet"
+    : { 1: "Had internet at last join", 2: "Internet by IP only (no DNS) at last join", 0: "No internet at last join" }[d.last_internet] || "No internet at last join";
+  const inetPill = el("span", { class: "pill inet-pill" + (d.last_internet == null ? "" : inetInfo(d.last_internet).cls), title: inetText },
+    globe(d.last_internet == null ? true : inetInfo(d.last_internet).off), el("span", { class: "pill-t" }, inetText));
   const joinBtn = el("button", { type: "button", class: "btn btn-primary", style: "padding:0 24px", onclick: (e) => doJoin(e.currentTarget) }, "Join");
   const r = d.resolved;
-  const tile = (k, v, from) => el("div", { class: "tile" }, el("span", { class: "k" }, k), el("span", { class: "v" }, v), from ? el("span", { class: "from" }, from) : null);
-  setHead(crumbs, d.name, [el("div", { class: "pill-slot" }, inetPill), historyMenu(), editBtn, joinBtn]);
+  // Compact facts for the strip under the bar; the longer detail is in each one's tooltip.
+  const tile = (k, v, from, tip) => el("div", { class: "tile", title: tip || null }, el("span", { class: "k" }, k), el("span", { class: "v" }, v), from ? el("span", { class: "from" }, from) : null);
+  const nw = netFromCidr(d.subnet); const pfx = Number(d.subnet.split("/")[1]);
+  setHead(crumbs, d.name, [el("div", { class: "pill-slot" }, inetPill), editBtn, joinBtn]);
   box.replaceChildren(
     el("div", { class: "tiles" },
-      tile("Network", netText(d.subnet), netFromCidr(d.subnet) ? `usable ${ip4.str(netFromCidr(d.subnet).first)} – ${ip4.str(netFromCidr(d.subnet).last)}` : null),
+      tile("Network", nw ? `${ip4.str(nw.net)}/${nw.prefix}` : d.subnet, nw ? nw.mask : null, nw ? `${netText(d.subnet)} · usable ${ip4.str(nw.first)} – ${ip4.str(nw.last)}` : null),
       d.addr_mode === "fixed"
         ? tile("Laptop address", d.fixed_ip || "—", "static IP")
-        : tile("Laptop address", `${shortIp(d.range_start, Number(d.subnet.split("/")[1]))} – ${shortIp(d.range_end, Number(d.subnet.split("/")[1]))}`, `${d.range_start} – ${d.range_end} · ${ALLOC_TEXT[d.alloc] || "first free"}`),
+        : tile("Laptop address", `${shortIp(d.range_start, pfx)} – ${shortIp(d.range_end, pfx)}`, ALLOC_TEXT[d.alloc] || "first free", `${d.range_start} – ${d.range_end}`),
       tile("Gateway / DNS", `${r.gateway || "—"} / ${r.dns.length ? r.dns.join(", ") : "—"}`,
-        r.gateway_from || r.dns_from ? `from ${[r.gateway_from, r.dns_from].filter(Boolean).join(" · ")}` : "none (default)"),
-      tile("Next IP on Join", d.next_ip || (d.next_how === "random from the range" ? "random" : "—"), d.next_how || null)),
-    ...(d.notes ? [el("p", { class: "muted", style: "margin:12px 0 0;white-space:pre-line" }, d.notes)] : []));
+        r.gateway_from || r.dns_from ? `from ${[r.gateway_from, r.dns_from].filter(Boolean).join(" · ")}` : "none set"),
+      tile("Next IP", d.next_ip || (d.next_how === "random from the range" ? "random" : "—"), d.next_how || null)),
+    ...(d.notes ? [el("p", { class: "notes", title: d.notes }, "Notes: ", d.notes.replace(/\s*\n\s*/g, " · "))] : []));
   renderHistory();
 }
 
 const ALLOC_TEXT = { first: "first free", last: "last free", random: "random", sticky: "last used, then first" };
 function netText(cidr) { const nw = netFromCidr(cidr); return nw ? `${ip4.str(nw.net)} · ${nw.mask} (/${nw.prefix})` : cidr; }
 
-// IP history lives in a drop-down next to Edit / Join, so the Devices panel gets the full width.
-function historyMenu() {
-  const n = state.detail && state.detail.history ? state.detail.history.length : 0;
-  const m = el("details", { class: "menu", id: "histMenu" },
-    el("summary", { class: "btn", title: "Addresses this laptop has used on this network" }, `History${n ? ` (${n})` : ""} ▾`),
-    el("div", { class: "menu-list hist-pop" }, el("ul", { id: "history", class: "hist" }),
-      el("p", { class: "small muted", style: "margin:6px 4px 2px" }, "Click an address to join with it again.")));
-  return m;
+// History (top bar, every page): recent joins across all networks, newest first. Loaded when opened – no polling.
+async function loadHistory() {
+  const ul = $("#history"); let rows;
+  try { rows = await api("/history?limit=20"); } catch (e) { ul.replaceChildren(el("li", { class: "empty" }, e.message)); return; }
+  if (!rows.length) { ul.replaceChildren(el("li", { class: "empty" }, "No joins yet.")); return; }
+  const here = state.detail && state.detail.kind === "network" ? state.detail.id : null;
+  ul.replaceChildren(...rows.map((h) => el("li", { class: h.network_id === here ? "here" : null },
+    el("button", { type: "button", title: `Join ${h.where ? h.where + " › " : ""}${h.network} with ${h.ip}`,
+      onclick: (e) => { $("#histMenu").open = false; joinNetwork(h.network_id, h.ip, null); } },
+      el("span", { class: "hnet" }, el("span", { class: "nm" }, h.network), h.where ? el("span", { class: "where" }, h.where) : null),
+      el("span", { class: "ip" }, h.ip),
+      h.result === "worked" && h.internet === 1 ? el("span", { class: "inet yes", title: "Had internet" }, globe(false)) : el("span", { class: "inet-gap" }),
+      el("span", { class: "tag " + h.result }, h.result === "worked" ? "✓ Worked" : h.result === "clashed" ? "! Clashed" : "× Failed"),
+      el("span", { class: "small muted when" }, when(h.ts))))));
 }
+$("#histMenu").addEventListener("toggle", (e) => { if (e.target.open) loadHistory(); });
 document.addEventListener("click", (e) => { const m = $("#histMenu"); if (m && m.open && !m.contains(e.target)) m.open = false; });
+
+// Join any network (History, Home), then show its page.
+async function joinNetwork(id, ip, btn) {
+  const name = (findNode(id) || {}).name || "network";
+  const ok = await withBusy(btn, async () => {
+    const r = await api("/join", { method: "POST", body: { network_id: id, ip } });
+    flash(`Joined ${name} as ${r.ip}/${r.prefix}${r.attempts > 1 ? ` (after ${r.attempts - 1} clash${r.attempts > 2 ? "es" : ""})` : ""} · ${inetInfo(r.internet).text}`, r.internet === 2 ? "warn" : "info");
+    return true;
+  });
+  await refreshStatus();
+  if (ok && findNode(id)) { if (state.selected === id) await refreshDetail(); else goTo(id); }
+  else await refreshDetail();
+}
 
 function goTo(id) { if (id === "home") return showHome(); const n = findNode(id); if (n) select(n); }
 async function showHome() { state.selected = "home"; saveUi(); renderTree(); await refreshDetail(); }
@@ -295,26 +326,39 @@ function crumbBar(d) {
   const nav = el("nav", { class: "crumbs", "aria-label": "Breadcrumb" });
   const chain = d ? [...d.crumbs, { id: d.id, name: d.name, kind: d.kind }] : [];
   const parts = [{ id: "home", name: "Home", kind: "home" }, ...chain];
+  // "…" stands in for the first levels when the trail doesn't fit on one line (see fitCrumbs)
+  const more = el("button", { type: "button", class: "crumb-more", hidden: true, "aria-label": "Show the hidden levels", title: "Hidden levels",
+    "aria-haspopup": "menu", "aria-expanded": "false",
+    onclick: (e) => openCrumbMenu(e.currentTarget, parts.filter((c, i) => nav.children[i + 1] && nav.children[i + 1].hidden)
+      .map((c) => c.id === "home" ? { id: "home", name: "Home", kind: "", children: state.tree } : (findNode(c.id) || c)), null) }, "…");
+  nav.append(more, ...parts.map(() => el("span", { class: "cgrp" })));
   parts.forEach((c, i) => {
+    const grp = nav.children[i + 1];
     const last = i === parts.length - 1;
     const kids = c.id === "home" ? state.tree : (findNode(c.id) || {}).children || [];
     const label = c.id === "home" ? [houseIcon(), "Home"] : c.name;
-    nav.append(last
-      ? el("span", { class: "crumb crumb-here", "aria-current": "page" }, label)
+    grp.append(last
+      ? el("h1", { class: "crumb crumb-here", "aria-current": "page" }, label)
       : el("button", { type: "button", class: "crumb", title: c.id === "home" ? "Go to Home" : `Go to ${c.kind} ${c.name}`,
           onclick: () => goTo(c.id) }, label));
     if (kids.length) {
       const next = parts[i + 1];
-      nav.append(el("button", { type: "button", class: "crumb-menu" + (last ? " forward" : ""),
+      grp.append(el("button", { type: "button", class: "crumb-menu" + (last ? " forward" : ""),
         "aria-haspopup": "menu", "aria-label": last ? `Go into ${c.name}` : `Other items in ${c.name}`,
         title: last ? `What's inside ${c.name}` : `Everything in ${c.id === "home" ? "Home" : c.name}`,
         "aria-expanded": "false",
         onclick: (e) => openCrumbMenu(e.currentTarget, kids, next ? next.id : null) }, el("span", { class: "chev", "aria-hidden": "true" }, "›")));
     } else if (!last) {
-      nav.append(el("span", { class: "sep", "aria-hidden": "true" }, "›"));
+      grp.append(el("span", { class: "sep", "aria-hidden": "true" }, "›"));
     }
   });
   return nav;
+}
+function refreshIcon() {
+  const ns = "http://www.w3.org/2000/svg"; const sv = document.createElementNS(ns, "svg");
+  for (const [k, v] of Object.entries({ width: 15, height: 15, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2.2, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) sv.setAttribute(k, v);
+  sv.innerHTML = '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>';
+  return sv;
 }
 function houseIcon() {
   const ns = "http://www.w3.org/2000/svg"; const sv = document.createElementNS(ns, "svg");
@@ -370,11 +414,8 @@ async function renderHome() {
   if (state.selected !== "home") return;
   state.home = h;
   const st = state.status || {};
-  const last = st.last_network && findNode(st.last_network.network_id) ? st.last_network : null;
   box.replaceChildren();
   setHead(crumbBar(null), "Home", [
-      last && !st.joined ? el("button", { type: "button", class: "btn", onclick: (e) => withBusy(e.currentTarget, async () => {
-        const r = await api("/rejoin", { method: "POST" }); flash(`Rejoined ${last.network} as ${r.ip}/${r.prefix}`); await refreshStatus(); renderHome(); }) }, `Rejoin ${last.network}`) : null,
       el("button", { type: "button", class: "btn", onclick: () => $("#discoverBtn").click() }, "Discover networks…"),
       el("button", { type: "button", class: "btn", onclick: () => $("#importSiteFile").click() }, "Import site…"),
       el("button", { type: "button", class: "btn btn-primary", onclick: () => openNode({ kind: "site" }) }, "+ Add site")]);
@@ -436,22 +477,15 @@ async function renderHome() {
     el("div", { class: "split" }, el("div", {}, el("h3", {}, "Devices by vendor"), vendors), el("div", {}, el("h3", {}, "Facts"), facts))];
 
   hv.replaceChildren(
-    el("div", { class: "home-top" }, card("Recent networks", recent), card("Needs attention", attention), card("This PC", pc)),
+    el("div", { class: "home-top" }, card("Recent networks", recent), card("Needs attention", attention), el("section", { class: "panel hcard" },
+      el("div", { class: "hcard-head" }, el("h2", {}, "This PC"),
+        el("button", { type: "button", class: "btn icon small refresh", "aria-label": "Refresh This PC", title: "Read the adapter again (NetJoin doesn't poll, to save battery)",
+          onclick: (e) => withBusy(e.currentTarget, async () => { await refreshStatus(); await refreshAdapters(); await renderHome(); }) }, refreshIcon())), pc)),
     el("section", { class: "panel hcard wide" }, el("h2", {}, "Sites"), sites),
     el("section", { class: "panel hcard wide2" }, el("h2", {}, "Stats"), ...stats));
 }
 
-async function joinFromHome(id, btn) {
-  const name = (findNode(id) || {}).name || "network";
-  const ok = await withBusy(btn, async () => {
-    const r = await api("/join", { method: "POST", body: { network_id: id } });
-    flash(`Joined ${name} as ${r.ip}/${r.prefix} · ${inetInfo(r.internet).text}`, r.internet === 2 ? "warn" : "info");
-    return true;
-  });
-  await refreshStatus();
-  if (ok && findNode(id)) goTo(id);                     // show where you've landed
-  else if (state.selected === "home") renderHome();
-}
+function joinFromHome(id, btn) { return joinNetwork(id, null, btn); }
 
 function openMissing(id) {
   state.filter = "missing";
@@ -520,20 +554,7 @@ function askImportConflict(names) {
   });
 }
 
-function renderHistory() {
-  renderScanMenu(); refreshDevices();
-  const ul = $("#history");
-  const d = state.detail;
-  if (!ul) return;
-  if (!d || d.kind !== "network") { ul.replaceChildren(el("li", { class: "empty" }, "Select a network.")); return; }
-  if (!d.history.length) { ul.replaceChildren(el("li", { class: "empty" }, "No joins yet.")); return; }
-  ul.replaceChildren(...d.history.map((h) => el("li", {},
-    el("button", { type: "button", title: `Join with ${h.ip}`, onclick: (e) => { const m = $("#histMenu"); if (m) m.open = false; doJoin(null, h.ip); } },
-      el("span", { class: "ip" }, h.ip),
-      h.result === "worked" && h.internet === 1 ? el("span", { class: "inet yes", title: "Had internet" }, globe(false)) : null,
-      el("span", { class: "tag " + h.result }, h.result === "worked" ? "✓ Worked" : h.result === "clashed" ? "! Clashed" : "× Failed"),
-      el("span", { class: "small muted" }, when(h.ts))))));
-}
+function renderHistory() { renderScanMenu(); refreshDevices(); }
 
 function when(ts) {
   const d = new Date(ts); const today = new Date();
@@ -1257,22 +1278,30 @@ $("#importSiteFile").addEventListener("change", async (e) => {
 $("#dhcpBtn").addEventListener("click", async (e) => {
   await withBusy(e.currentTarget, async () => { await api("/dhcp", { method: "POST" }); flash("Adapter set back to DHCP"); });
   await refreshStatus();   // after withBusy re-enables the button, so the DHCP state decides
-  if (state.detail) refreshDetail();
+  refreshDetail();
 });
-$("#rejoinBtn").addEventListener("click", (e) => withBusy(e.currentTarget, async () => {
-  const r = await api("/rejoin", { method: "POST" }); flash(`Rejoined as ${r.ip}/${r.prefix}`); setConnPop(false);
-  await refreshStatus(); await refreshTree();
-  const id = state.status && state.status.joined && state.status.joined.network_id;
-  if (id && findNode(id)) goTo(id); else await refreshDetail(); }));
-
 // Toasts sit just under the top bar, whatever height it wraps to.
-if (window.ResizeObserver) new ResizeObserver(([e]) => document.documentElement.style.setProperty("--tb-h", `${Math.round(e.target.getBoundingClientRect().bottom)}px`)).observe($("#topbar"));
+if (window.ResizeObserver) {
+  const ro = new ResizeObserver(() => document.documentElement.style.setProperty("--tb-h",
+    `${Math.round(Math.max($("#topbar").getBoundingClientRect().bottom, $("#detail").getBoundingClientRect().bottom))}px`));
+  ro.observe($("#topbar")); ro.observe($("#detail"));
+}
 
 (async function init() {
   try { applyTheme((await api("/settings/ui")).theme); } catch (e) { try { applyTheme(localStorage.getItem("netjoin-theme")); } catch (e2) {} }
   await refreshStatus(); await refreshAdapters(); await refreshTree();
   try { state.scan = await api("/scan"); } catch (e) {}
   await refreshDetail(); await refreshLog(); if (state.scan.running) pollScan();
-  setInterval(refreshStatus, 5000); setInterval(refreshLog, 3000);
-  setInterval(() => { if (document.visibilityState === "visible" && !state.busy && document.activeElement !== $("#adapter")) refreshAdapters(); }, 15000);
+  // Battery: no background polling of the adapter (each read runs netsh). It's read again after every
+  // action, when the window comes back into focus, and from the ↻ on This PC. The Activity log (cheap,
+  // in memory) is only polled while the window is visible.
+  setInterval(() => { if (document.visibilityState === "visible") refreshLog(); }, 3000);
+  let lastFocusRead = Date.now();
+  const onBack = () => {
+    if (document.visibilityState !== "visible" || state.busy || Date.now() - lastFocusRead < 3000) return;
+    lastFocusRead = Date.now();
+    refreshStatus().then(() => { if (state.selected === "home") renderHome(); });
+    refreshLog();
+  };
+  window.addEventListener("focus", onBack); document.addEventListener("visibilitychange", onBack);
 })();

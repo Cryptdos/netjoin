@@ -230,6 +230,10 @@ def clear_devices(req, data):
     return {"cleared": n}
 
 
+def history(req, data):
+    return eng().store.recent_history(int(req.query_params.get("limit", 20)))
+
+
 def log(req, data):
     return eng().log.since(int(req.query_params.get("after", 0)))
 
@@ -319,6 +323,7 @@ def build_app(engine: Engine, port: int, scans: ScanManager) -> Starlette:
         Route("/api/join", api(join), methods=["POST"]),
         Route("/api/dhcp", api(dhcp), methods=["POST"]),
         Route("/api/rejoin", api(rejoin), methods=["POST"]),
+        Route("/api/history", api(history)),
         Route("/api/internet", api(internet), methods=["POST"]),
         Route("/api/home", api(home)),
         Route("/api/scan", api(scan_status)),
