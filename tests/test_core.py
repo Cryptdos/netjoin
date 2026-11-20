@@ -148,6 +148,32 @@ class StoreAndJoin(unittest.TestCase):
         self.engine.dhcp()
         self.assertEqual(self.engine.apply_config_changes(), {"changed": False})
 
+    def test_move_and_nest(self):
+        site = self.store.tree()[0]["id"]
+        a2 = self.store.create_node("area", site, {"name": "B area"})
+        net2 = self.store.create_node("network", site, {"name": "Loose", "subnet": "10.30.0.0/24"})
+        names = lambda pid: [r["name"] for r in self.store._siblings(pid)]
+        self.assertEqual(names(site), ["Area", "B area", "Loose"])          # new items go to the end
+        self.store.move_node(net2["id"], site, 0)                             # reorder
+        self.assertEqual(names(site), ["Loose", "Area", "B area"])
+        self.store.move_node(net2["id"], a2["id"])                            # nest into an area
+        self.assertEqual((names(site), names(a2["id"])), (["Area", "B area"], ["Loose"]))
+        self.store.move_node(a2["id"], self.area["id"], 0)                    # area inside an area
+        self.assertEqual(names(self.area["id"]), ["B area", "FCU"])
+        for bad in ((self.area["id"], a2["id"]),          # inside something inside itself
+                    (site, self.area["id"]),              # a site inside an area
+                    (a2["id"], None)):                    # an area at the top level
+            with self.assertRaises(StoreError):
+                self.store.move_node(bad[0], bad[1])
+        with self.assertRaises(StoreError):               # nothing inside a network
+            self.store.move_node(a2["id"], self.net["id"])
+        s2 = self.store.create_node("site", None, {"name": "A site"})
+        self.store.move_node(s2["id"], None, 0)                               # reorder sites
+        self.assertEqual(names(None), ["A site", "Site"])
+        with self.assertRaises(StoreError):               # never into another site
+            self.store.move_node(net2["id"], s2["id"])
+        self.assertEqual(names(a2["id"]), ["Loose"])
+
     def test_join_skips_clash(self):
         r = self.engine.join(self.net["id"])          # .200 is "taken" in the fake back-end
         self.assertEqual((r["ip"], r["attempts"]), ("10.20.5.201", 2))

@@ -137,6 +137,8 @@
     <h2 id="nodeTitle">Add</h2>
     <input type="hidden" name="id"><input type="hidden" name="kind"><input type="hidden" name="parent_id">
     <label>Name <input name="name" required autocomplete="off"></label>
+    <label class="move-only" hidden>Inside <select name="move_parent"></select>
+      <span class="small muted">Move it straight under its site or into one of the site's areas – or drag it in the Sites list.</span></label>
     <div class="net-only">
       <div class="netrow">
         <label>IP Network <input name="net_ip" class="mono" placeholder="e.g. 192.168.0.1" autocomplete="off" spellcheck="false"></label>

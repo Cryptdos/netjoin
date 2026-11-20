@@ -189,7 +189,8 @@ function renderTree() {
   const build = (nodes) => nodes.filter((n) => matches(n, q)).map((n) => {
     const kids = n.children || [];
     const open = q || state.expanded.has(n.id);
-    const item = el("div", { class: "item" + (state.selected === n.id ? " sel" : "") },
+    const item = el("div", { class: "item" + (state.selected === n.id ? " sel" : ""), "data-id": n.id, draggable: q ? null : "true",
+        title: q ? null : "Drag to reorder, or drop onto a site / area to move it inside" },
       el("button", { type: "button", class: "tog", "aria-label": open ? "Collapse" : "Expand", "aria-expanded": kids.length ? String(!!open) : null,
         onclick: () => { open ? state.expanded.delete(n.id) : state.expanded.add(n.id); saveUi(); renderTree(); } }, kids.length ? (open ? "▾" : "▸") : ""),
       el("button", { type: "button", class: "lbl", onclick: () => select(n) },
@@ -206,6 +207,79 @@ function renderTree() {
     el("span", { class: "tog" }, ""), el("button", { type: "button", class: "lbl", onclick: showHome }, houseIcon(), el("span", { class: "nm" }, "Home"))));
   $("#tree").replaceChildren(...[home].filter(Boolean), ...(nodes.length ? nodes : [el("li", { class: "empty" }, q ? "Nothing matches." : "No sites yet.")]));
 }
+
+// ---------- Drag and drop in the Sites list ----------
+// Drop on the top or bottom edge of an item to put it before / after; drop on the middle of a site or
+// area to move it inside. Sites only reorder among sites; areas and networks stay within their own site.
+const parentOf = (id) => { const n = findNode(id); return n ? n.parent_id ?? null : null; };
+const siteOf = (id) => { let n = findNode(id); while (n && n.parent_id != null) n = findNode(n.parent_id); return n ? n.id : null; };
+const isInside = (id, ancestorId) => { for (let p = parentOf(id); p != null; p = parentOf(p)) if (p === ancestorId) return true; return false; };
+function dropPlan(drag, target, y, h) {
+  if (!drag || !target || drag.id === target.id) return null;
+  if (target.kind !== "site" && isInside(target.id, drag.id)) return null;          // not inside itself
+  const edge = y < h * 0.28 ? "before" : y > h * 0.72 ? "after" : "into";
+  if (drag.kind === "site") return target.kind === "site" ? (edge === "into" ? (y < h / 2 ? "before" : "after") : edge) : null;
+  if (siteOf(drag.id) !== siteOf(target.id)) return null;                          // same site only
+  if (target.kind === "site") return "into";                                       // a site row: inside it
+  if (target.kind === "network") return edge === "into" ? (y < h / 2 ? "before" : "after") : edge;
+  return edge;                                                                     // area: before / into / after
+}
+const drag = { node: null, over: null, plan: null, timer: null };
+function clearDropMarks() { for (const e of document.querySelectorAll("#tree .drop-before, #tree .drop-after, #tree .drop-into")) e.classList.remove("drop-before", "drop-after", "drop-into"); }
+$("#tree").addEventListener("dragstart", (e) => {
+  const it = e.target.closest && e.target.closest(".item[data-id]"); if (!it) return;
+  drag.node = findNode(Number(it.dataset.id)); if (!drag.node) return;
+  e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", String(drag.node.id));
+  requestAnimationFrame(() => it.classList.add("dragging")); document.body.classList.add("tree-dragging");
+});
+$("#tree").addEventListener("dragover", (e) => {
+  if (!drag.node) return;
+  const it = e.target.closest && e.target.closest(".item[data-id]");
+  const target = it ? findNode(Number(it.dataset.id)) : null;
+  const r = it ? it.getBoundingClientRect() : null;
+  const plan = target ? dropPlan(drag.node, target, e.clientY - r.top, r.height) : null;
+  if (it !== drag.over || plan !== drag.plan) {
+    clearDropMarks(); clearTimeout(drag.timer);
+    drag.over = it; drag.plan = plan;
+    if (plan) it.classList.add("drop-" + plan);
+    // Hovering "into" a closed site / area opens it, so you can go deeper
+    if (plan === "into" && target.children && target.children.length && !state.expanded.has(target.id))
+      drag.timer = setTimeout(() => { state.expanded.add(target.id); renderTree(); }, 650);
+  }
+  if (plan) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } else e.dataTransfer.dropEffect = "none";
+});
+$("#tree").addEventListener("dragleave", (e) => { if (!$("#tree").contains(e.relatedTarget)) { clearDropMarks(); drag.over = drag.plan = null; } });
+$("#tree").addEventListener("drop", async (e) => {
+  if (!drag.node || !drag.plan || !drag.over) return;
+  e.preventDefault();
+  const moving = drag.node; const target = findNode(Number(drag.over.dataset.id)); const plan = drag.plan;
+  endDrag();
+  let parentId, index = null;
+  if (plan === "into") parentId = target.id;
+  else {
+    parentId = target.parent_id ?? null;
+    const sibs = (parentId == null ? state.tree : (findNode(parentId).children || [])).filter((x) => x.id !== moving.id);
+    index = sibs.findIndex((x) => x.id === target.id) + (plan === "after" ? 1 : 0);
+  }
+  try {
+    const r = await api(`/nodes/${moving.id}/move`, { method: "POST", body: { parent_id: parentId, index } });
+    if (plan === "into") state.expanded.add(target.id);
+    saveUi(); await refreshTree();
+    if (state.selected !== "home") await refreshDetail();        // breadcrumbs / inherited gateway may have changed
+    refreshLog();
+    if (r.live) await handleLive(r.live);
+  } catch (err) { flash(err.message, "error"); }
+});
+function endDrag() {
+  clearTimeout(drag.timer); clearDropMarks(); document.body.classList.remove("tree-dragging");
+  for (const x of document.querySelectorAll("#tree .dragging")) x.classList.remove("dragging");
+  drag.node = drag.over = drag.plan = null;
+}
+document.addEventListener("dragend", endDrag);
+// If the list redrew mid-drag (opening a branch), the dragged row is gone and its dragend never
+// arrives – tidy up on the next drop anywhere or the next click.
+document.addEventListener("drop", () => { if (drag.node) setTimeout(endDrag, 0); });
+document.addEventListener("pointerdown", () => { if (drag.node) endDrag(); });
 
 function findNode(id, nodes = state.tree) {
   for (const n of nodes) { if (n.id === id) return n; const f = findNode(id, n.children || []); if (f) return f; }
@@ -1102,6 +1176,18 @@ function openNode({ node, parent, kind }) {
     f.alloc.value = node.alloc || "first";
     for (const r of f.addr_mode) r.checked = r.value === (node.addr_mode || "range");
   }
+  // Editing an area or network: where it lives, within the same site
+  const mv = f.querySelector(".move-only"); mv.hidden = !node || node.kind === "site";
+  if (node && node.kind !== "site") {
+    const site = findNode(siteOf(node.id)); const opts = [];
+    const walk = (n, depth) => {
+      if (n.id === node.id || n.kind === "network") return;            // not itself, not inside itself
+      opts.push(el("option", { value: n.id, selected: n.id === node.parent_id }, `${"\u2003".repeat(depth)}${n.kind === "site" ? "Site" : "Area"}: ${n.name}`));
+      for (const c of n.children || []) walk(c, depth + 1);
+    };
+    if (site) walk(site, 0);
+    f.move_parent.replaceChildren(...opts);
+  }
   syncOverrides(f); syncAddrMode(); netChanged();
   $("#nodeDlg").showModal(); f.name.focus();
 }
@@ -1203,7 +1289,14 @@ $("#nodeForm").addEventListener("submit", async (e) => {
   }
   try {
     let n;
-    if (id) { n = await api(`/nodes/${id}`, { method: "PUT", body }); }
+    if (id) {
+      const mv = f.querySelector(".move-only");
+      if (!mv.hidden && f.move_parent.value && Number(f.move_parent.value) !== parentOf(Number(id))) {
+        await api(`/nodes/${id}/move`, { method: "POST", body: { parent_id: Number(f.move_parent.value) } });
+        state.expanded.add(Number(f.move_parent.value));
+      }
+      n = await api(`/nodes/${id}`, { method: "PUT", body });      // its 'live' reflects the move as well
+    }
     else { n = await api("/nodes", { method: "POST", body: { ...body, kind: f.kind.value, parent_id: f.parent_id.value === "" ? null : Number(f.parent_id.value) } });
       if (n.parent_id != null) state.expanded.add(n.parent_id); state.selected = n.id; saveUi(); }
     $("#nodeDlg").close();

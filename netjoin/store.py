@@ -247,12 +247,54 @@ class Store:
         if kind == "network":
             clean = self._validate_network(clean)
         clean.update(kind=kind, parent_id=parent_id, created=now(), updated=now())
+        if "sort" not in clean:      # new items go to the end of their parent's list
+            clean["sort"] = self._next_sort(parent_id)
         cols = ",".join(clean)
         with self._lock:
             cur = self.db.execute(f"INSERT INTO nodes({cols}) VALUES({','.join('?' * len(clean))})",
                                   tuple(clean.values()))
             self.db.commit()
         return self.node(cur.lastrowid)
+
+    def _siblings(self, parent_id: int | None) -> list[dict]:
+        q = "SELECT id, sort, name FROM nodes WHERE parent_id IS ? ORDER BY sort, name COLLATE NOCASE"
+        return [dict(r) for r in self.db.execute(q, (parent_id,))]
+
+    def _next_sort(self, parent_id: int | None) -> int:
+        sib = self._siblings(parent_id)
+        return (max(r["sort"] for r in sib) + 1) if sib else 0
+
+    def move_node(self, node_id: int, parent_id: int | None, index: int | None = None) -> dict:
+        """Move a node to a new parent (or the same one) at a position among its siblings.
+        Sites stay at the top level; areas and networks go inside a site or an area; nothing can go
+        inside itself or something inside it."""
+        n = self.node(node_id)
+        if not n:
+            raise StoreError("Not found")
+        parent = self.node(parent_id) if parent_id is not None else None
+        if parent_id is not None and not parent:
+            raise StoreError("That place no longer exists")
+        if (parent["kind"] if parent else None) not in ALLOWED_PARENTS[n["kind"]]:
+            where = f"a {parent['kind']}" if parent else "the top level"
+            raise StoreError(f"A {n['kind']} can't go inside {where}" if parent else f"A {n['kind']} has to be inside a site or an area")
+        if parent_id is not None and any(a["id"] == node_id for a in self.ancestors(parent_id)):
+            raise StoreError(f"Can't move '{n['name']}' inside itself")
+        if n["kind"] != "site":                       # areas and networks stay in their own site
+            site_of = lambda nid: self.ancestors(nid)[-1]["id"]
+            if site_of(node_id) != site_of(parent_id):
+                raise StoreError(f"'{n['name']}' can only move within its own site")
+        with self._lock:
+            sib = [r["id"] for r in self._siblings(parent_id) if r["id"] != node_id]
+            index = len(sib) if index is None else max(0, min(int(index), len(sib)))
+            sib.insert(index, node_id)
+            # Renumber the whole list so the order is explicit from now on
+            self.db.executemany("UPDATE nodes SET sort=? WHERE id=?", [(i, nid) for i, nid in enumerate(sib)])
+            self.db.execute("UPDATE nodes SET parent_id=?, updated=? WHERE id=?", (parent_id, now(), node_id))
+            if n["parent_id"] != parent_id:     # close the gap it left
+                rest = [r["id"] for r in self._siblings(n["parent_id"]) if r["id"] != node_id]
+                self.db.executemany("UPDATE nodes SET sort=? WHERE id=?", [(i, nid) for i, nid in enumerate(rest)])
+            self.db.commit()
+        return self.node(node_id)
 
     def update_node(self, node_id: int, data: dict) -> dict:
         cur = self.node(node_id)

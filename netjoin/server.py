@@ -148,6 +148,17 @@ def update_node(req, data):
     return {**n, "live": eng().apply_config_changes()}
 
 
+def move_node(req, data):
+    nid = int(req.path_params["id"])
+    before = eng().store.node(nid)
+    pid = data.get("parent_id")
+    n = eng().store.move_node(nid, int(pid) if pid is not None else None, data.get("index"))
+    if before and before["parent_id"] != n["parent_id"]:
+        eng().log.add(f"Moved {n['kind']} '{n['name']}' to {' › '.join(eng().store.path_names(n['parent_id'])) if n['parent_id'] else 'the top level'}")
+    # Moving a network (or the area / site above it) can change the gateway / DNS it inherits
+    return {**n, "live": eng().apply_config_changes()}
+
+
 def apply_changes(req, data):
     return eng().apply_config_changes(confirm=bool(data.get("confirm") or data.get("gateway")))
 
@@ -330,6 +341,7 @@ def build_app(engine: Engine, port: int, scans: ScanManager) -> Starlette:
         Route("/api/nodes", api(create_node), methods=["POST"]),
         Route("/api/nodes/{id:int}", api(node_detail)),
         Route("/api/nodes/{id:int}", api(update_node), methods=["PUT"]),
+        Route("/api/nodes/{id:int}/move", api(move_node), methods=["POST"]),
         Route("/api/nodes/{id:int}", api(delete_node), methods=["DELETE"]),
         Route("/api/join", api(join), methods=["POST"]),
         Route("/api/dhcp", api(dhcp), methods=["POST"]),
