@@ -218,13 +218,14 @@ async function refreshDetail() {
   const crumbs = crumbBar(d);
   const editBtn = el("button", { type: "button", class: "btn", onclick: () => openNode({ node: d }) }, "Edit");
   if (d.kind !== "network") {
-    box.replaceChildren(el("div", { class: "dhead" },
-      el("div", { class: "row", style: "flex-direction:column;align-items:flex-start;gap:4px" }, crumbs, el("h1", {}, d.name)),
+    // Header (crumbs, name, counts | buttons) then a compact Contents strip under a divider.
+    box.replaceChildren(el("div", { class: "dhead dhead-group" },
+      el("div", { class: "row", style: "flex-direction:column;align-items:flex-start;gap:4px" }, crumbs, el("h1", {}, d.name),
+        el("p", { class: "roll-stats", id: "rollStats" }, `${d.kind === "site" ? "Site" : "Area"} · pick a network inside it to join.`)),
       el("div", { class: "spacer" }),
       el("div", { class: "row" }, d.kind === "site" ? exportMenu(d) : null, editBtn,
         el("button", { type: "button", class: "btn", onclick: () => openNode({ parent: d, kind: "area" }) }, "+ Area"),
         el("button", { type: "button", class: "btn btn-primary", onclick: () => openNode({ parent: d, kind: "network" }) }, "+ Network"))),
-      el("p", { class: "roll-stats", id: "rollStats" }, `${d.kind === "site" ? "Site" : "Area"} · pick a network inside it to join.`),
       el("div", { class: "contents", id: "contents", "aria-label": `Inside ${d.name}` }));
     renderContents(); renderHistory(); return;
   }
@@ -453,9 +454,9 @@ function renderContents() {
     const meta = n.kind === "network"
       ? [el("span", { class: "mono" }, n.subnet || ""), ` · ${total} device${total === 1 ? "" : "s"}`]
       : [`${ids.length} network${ids.length === 1 ? "" : "s"} · ${total} device${total === 1 ? "" : "s"}`];
-    return el("button", { type: "button", class: "ccard", onclick: () => goTo(n.id), title: `Open ${n.name}` },
-      el("span", { class: "k" }, KIND_LABEL[n.kind]), el("span", { class: "nm" }, n.name),
-      el("span", { class: "meta" }, meta), gone ? el("span", { class: "gone small" }, `${gone} inactive`) : null);
+    return el("button", { type: "button", class: "ccard", onclick: () => goTo(n.id), title: `Open ${KIND_LABEL[n.kind].toLowerCase()} ${n.name}` },
+      el("span", { class: "nm" }, n.name),
+      el("span", { class: "meta" }, meta), gone ? el("span", { class: "gone small" }, `· ${gone} inactive`) : null);
   }));
 }
 
