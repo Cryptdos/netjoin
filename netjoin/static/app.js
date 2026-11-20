@@ -125,7 +125,8 @@ async function refreshStatus() {
     const p = s.primary;
     cur.append(el("span", { class: "small muted" }, "Current"),
       el("span", { class: "mono" }, p ? `${p.ip}/${p.prefix}` : "no IPv4"),
-      el("span", { class: "small muted cur-mode", title: (s.adapter.dhcp ? "DHCP" : "Static") + (s.joined ? ` · ${s.joined.path || s.joined.network}` : "") }, (s.adapter.dhcp ? "DHCP" : "Static") + (s.joined ? ` · ${s.joined.network}` : "")));
+      el("span", { class: "small muted cur-mode", title: (s.adapter.dhcp ? "DHCP" : "Static") + (s.joined ? ` · ${s.joined.path || s.joined.network}` : "") },
+        s.adapter.dhcp ? "DHCP" : "Static", ...(s.joined ? [" · ", joinedLink(s.joined)] : [])));
     if (s.internet !== null && s.internet !== undefined) {
       const i = inetInfo(s.internet);
       cur.append(el("span", { class: "inet" + i.cls, title: s.internet === 2 ? "Reaches the internet by IP, but no DNS server answers, so web pages won't load. Set DNS on the network (Edit → Override DNS)." : null }, globe(i.off), i.text));
@@ -205,6 +206,13 @@ async function select(n) {
   await refreshDetail();
 }
 
+// The network the laptop is on, as a link to its page (top bar and This PC).
+function joinedLink(j) {
+  if (!j) return null;
+  if (!j.network_id || !findNode(j.network_id)) return el("span", {}, j.network);
+  return el("button", { type: "button", class: "netlink", title: `Open ${j.path || j.network}`, onclick: () => goTo(j.network_id) }, j.network);
+}
+
 // ---------- detail ----------
 async function refreshDetail() {
   const box = $("#detail");
@@ -238,8 +246,8 @@ async function refreshDetail() {
   box.replaceChildren(
     el("div", { class: "dhead" },
       el("div", { class: "row", style: "flex-direction:column;align-items:flex-start;gap:4px" }, crumbs, el("h1", {}, d.name)),
-      el("div", { style: "margin-top:22px" }, inetPill),
       el("div", { class: "spacer" }),
+      el("div", { class: "pill-slot" }, inetPill),
       el("div", { class: "row" }, historyMenu(), editBtn, joinBtn)),
     el("div", { class: "tiles" },
       tile("Network", netText(d.subnet), netFromCidr(d.subnet) ? `usable ${ip4.str(netFromCidr(d.subnet).first)} – ${ip4.str(netFromCidr(d.subnet).last)}` : null),
@@ -378,7 +386,7 @@ async function renderHome() {
   const kv = (k, v) => [el("dt", {}, k), el("dd", {}, v)];
   const pc = el("dl", { class: "kv" },
     ...kv("Adapter", st.adapter_missing ? `${st.adapter_missing.name} (unplugged)` : a ? `${a.name}${a.description ? " – " + a.description : ""}` : "none picked"),
-    ...kv("Address", p ? `${p.ip}/${p.prefix} · ${a && a.dhcp ? "DHCP" : "Static"}${st.joined ? ` · ${st.joined.network}` : ""}` : "—"),
+    ...kv("Address", p ? [`${p.ip}/${p.prefix} · ${a && a.dhcp ? "DHCP" : "Static"}`, ...(st.joined ? [" · ", joinedLink(st.joined)] : [])] : "—"),
     ...kv("MAC", a && a.mac ? a.mac : "—"),
     ...kv("Internet", st.internet == null ? "not checked" : inetInfo(st.internet).text),
     ...kv("Npcap", st.npcap ? (st.npcap.available ? "installed" : st.npcap.note) : "—"),
@@ -427,11 +435,14 @@ async function renderHome() {
 
 async function joinFromHome(id, btn) {
   const name = (findNode(id) || {}).name || "network";
-  await withBusy(btn, async () => {
+  const ok = await withBusy(btn, async () => {
     const r = await api("/join", { method: "POST", body: { network_id: id } });
     flash(`Joined ${name} as ${r.ip}/${r.prefix} · ${inetInfo(r.internet).text}`, r.internet === 2 ? "warn" : "info");
+    return true;
   });
-  await refreshStatus(); if (state.selected === "home") renderHome();
+  await refreshStatus();
+  if (ok && findNode(id)) goTo(id);                     // show where you've landed
+  else if (state.selected === "home") renderHome();
 }
 
 function openMissing(id) {
