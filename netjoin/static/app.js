@@ -143,10 +143,16 @@ async function refreshStatus() {
     ...kv("Internet", s.internet == null ? "not checked" : inetInfo(s.internet).text),
     ...(s.backend === "fake" ? kv("Mode", "Demo – nothing on this PC is changed") : []));
   $("#checkInetBtn").disabled = !a;
+  const jb = document.querySelector("#tbActions .join-btn");
+  if (jb && state.detail && state.detail.kind === "network") {
+    const here = !!(s.joined && s.joined.network_id === state.detail.id);
+    if (here !== jb.classList.contains("joined") && !jb.classList.contains("busy")) refreshDetail();
+  }
   // Revert to DHCP only makes sense when the adapter isn't already on DHCP.
   const dh = $("#dhcpBtn");
   if (!dh.classList.contains("busy")) {
     const already = !!(s.adapter && s.adapter.dhcp === true);
+    dh.hidden = !s.adapter || already;        // nothing to revert: keep the bar clear
     dh.disabled = !s.adapter || already;
     dh.title = !s.adapter ? "Pick an adapter first" : already ? `${s.adapter.name} is already on DHCP` : `Set ${s.adapter.name} back to DHCP`;
   }
@@ -306,7 +312,12 @@ async function refreshDetail() {
     : { 1: "Had internet at last join", 2: "Internet by IP only (no DNS) at last join", 0: "No internet at last join" }[d.last_internet] || "No internet at last join";
   const inetPill = el("span", { class: "pill inet-pill" + (d.last_internet == null ? "" : inetInfo(d.last_internet).cls), title: inetText },
     globe(d.last_internet == null ? true : inetInfo(d.last_internet).off), el("span", { class: "pill-t" }, inetText));
-  const joinBtn = el("button", { type: "button", class: "btn btn-primary", style: "padding:0 24px", onclick: (e) => doJoin(e.currentTarget) }, "Join");
+  // Join shows where you are: blue "Join" when the laptop isn't on this network, outlined "Rejoin" once it is.
+  const st0 = state.status || {};
+  const here = !!(st0.joined && st0.joined.network_id === d.id);
+  const joinBtn = el("button", { type: "button", class: here ? "btn join-btn joined" : "btn btn-primary join-btn",
+    title: here ? `On ${d.name} as ${st0.joined.ip}/${st0.joined.prefix}. Rejoin picks the Join IP again.` : `Set ${st0.adapter ? st0.adapter.name : "the adapter"} to an address on ${d.name}`,
+    onclick: (e) => doJoin(e.currentTarget) }, here ? [checkIcon(), "Rejoin"] : "Join");
   const r = d.resolved;
   // Compact facts for the strip under the bar; the longer detail is in each one's tooltip.
   const tile = (k, v, from, tip) => el("div", { class: "tile", title: tip || null }, el("span", { class: "k" }, k), el("span", { class: "v" }, v), from ? el("span", { class: "from" }, from) : null);
@@ -403,6 +414,12 @@ function crumbBar(d) {
     }
   });
   return nav;
+}
+function checkIcon() {
+  const ns = "http://www.w3.org/2000/svg"; const sv = document.createElementNS(ns, "svg");
+  for (const [k, v] of Object.entries({ width: 15, height: 15, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 2.6, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) sv.setAttribute(k, v);
+  sv.innerHTML = '<path d="M5 12.5l4.5 4.5L19 7.5"/>';
+  return sv;
 }
 function refreshIcon() {
   const ns = "http://www.w3.org/2000/svg"; const sv = document.createElementNS(ns, "svg");

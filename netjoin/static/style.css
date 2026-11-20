@@ -389,13 +389,18 @@ body.at-home .lower{display:none}
 
 /* ---------- v0.8 one top bar: app + page, on one line ----------
    [☰ NetJoin] [… › Area › Network (title) ......] [page buttons] │ [● adapter ▾ ip · mode · net 🌐] [History ▾] [DHCP] [⚙]   */
-.topbar{display:grid;grid-template-columns:auto minmax(120px,1fr) auto auto;grid-template-areas:"brand crumbs actions global";
+.topbar{display:grid;grid-template-columns:auto minmax(120px,1fr) auto auto auto;grid-template-areas:"brand crumbs actions dhcp global";
   align-items:center;gap:8px 16px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line);position:relative;z-index:30}
 .tb-brand{grid-area:brand;display:flex;align-items:center;gap:12px;align-self:stretch;padding-right:16px;border-right:1px solid var(--line2)}
 .tb-global{grid-area:global;display:flex;align-items:center;justify-content:flex-end;gap:8px;min-width:0;padding-left:16px;border-left:1px solid var(--line2)}
 .tb-actions{grid-area:actions;display:flex;flex-wrap:nowrap;align-items:center;justify-content:flex-end;gap:8px;min-width:0}
 .tb-actions:empty{display:none}
-.tb-global .btn-strong{height:36px}
+.tb-dhcp{grid-area:dhcp;font-weight:600;margin-left:-8px}
+.tb-dhcp[hidden]{display:none}
+.tb-dhcp .short{display:none}
+.join-btn{min-width:96px}
+.join-btn.joined{color:var(--accent-d);border-color:var(--accent-line);background:var(--accent-bg)}
+.join-btn.joined svg{color:#2E9E5B}
 .topbar .btn.icon{flex:none}
 .demo-badge{font:600 10px/1 var(--mono);letter-spacing:.06em;padding:3px 6px;border-radius:4px;background:var(--warn-bg);color:var(--warn);border:1px solid var(--warn-line)}
 .demo-badge[hidden]{display:none}
@@ -440,20 +445,22 @@ body.at-home #detail{display:none}
 
 /* Narrower windows: things give way in this order, so the bar stays on one line as long as possible */
 @media (max-width: 1680px){ .inet-pill .pill-t{display:none} .inet-pill{padding:0 8px;height:30px} }
-@media (max-width: 1440px){ #dhcpBtn .long{display:none} }
+@media (max-width: 1440px){ #dhcpBtn .long{display:none} #dhcpBtn .short{display:inline} }
 @media (max-width: 1366px){ .current .inet-t{display:none} }
 @media (max-width: 1280px){ .brand .logo{display:none} }
 @media (max-width: 1150px){ .current .cur-mode{display:none} }
 @media (max-width: 1100px){
-  .topbar{grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"brand crumbs crumbs" "actions actions global"}
+  .topbar{grid-template-columns:auto minmax(0,1fr) auto auto;grid-template-areas:"brand crumbs crumbs crumbs" "actions actions dhcp global"}
   .current .cur-mode{display:inline}
   .tb-actions{justify-content:flex-start}
 }
 @media (max-width: 640px){
-  .topbar{grid-template-columns:minmax(0,1fr);grid-template-areas:"brand" "crumbs" "global" "actions";padding:10px 12px}
+  .topbar{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"brand brand" "crumbs crumbs" "global global" "actions dhcp";padding:10px 12px}
   .tb-brand{border-right:0;padding-right:0}
   .tb-global{padding-left:0;border-left:0;flex-wrap:wrap}
-  .conn{flex:1 1 100%}
+  .conn{flex:1 1 100%;order:-1}
+  .tb-global #histMenu{margin-left:auto}
+  .tb-dhcp{margin-left:0}
   .tb-actions{flex-wrap:wrap}
   .brand .logo{display:inline}
   .tb-crumbs .crumb-here{font-size:20px}
