@@ -78,7 +78,7 @@ async function api(path, opts = {}) {
   if (opts.body !== undefined) { init.headers["Content-Type"] = "application/json"; init.body = JSON.stringify(opts.body); }
   const r = await fetch("/api" + path, init);
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  if (!r.ok) { const err = new Error(data.error || `HTTP ${r.status}`); err.status = r.status; err.data = data; throw err; }
   return data;
 }
 
@@ -222,7 +222,7 @@ async function refreshDetail() {
     box.replaceChildren(el("div", { class: "dhead" },
       el("div", { class: "row", style: "flex-direction:column;align-items:flex-start;gap:4px" }, crumbs, el("h1", {}, d.name)),
       el("div", { class: "spacer" }),
-      el("div", { class: "row" }, editBtn,
+      el("div", { class: "row" }, d.kind === "site" ? exportMenu(d) : null, editBtn,
         el("button", { type: "button", class: "btn", onclick: () => openNode({ parent: d, kind: "area" }) }, "+ Area"),
         el("button", { type: "button", class: "btn btn-primary", onclick: () => openNode({ parent: d, kind: "network" }) }, "+ Network"))),
       el("p", { class: "roll-stats", id: "rollStats" }, `${d.kind === "site" ? "Site" : "Area"} · pick a network inside it to join.`));
@@ -267,6 +267,47 @@ function historyMenu() {
 document.addEventListener("click", (e) => { const m = $("#histMenu"); if (m && m.open && !m.contains(e.target)) m.open = false; });
 
 function goTo(id) { const n = findNode(id); if (n) select(n); }
+
+// Site page: Export ▾ (plan item 1)
+function exportMenu(d) {
+  return el("details", { class: "menu", id: "exportMenu" },
+    el("summary", { class: "btn", title: "Save this site to a file, e.g. to move it to another laptop" }, "Export ▾"),
+    el("div", { class: "menu-list", role: "menu" },
+      el("a", { class: "mi", role: "menuitem", href: `/api/export?node_id=${d.id}`, download: "" },
+        el("span", {}, "Export site"), el("span", { class: "d" }, "Areas and networks")),
+      el("a", { class: "mi", role: "menuitem", href: `/api/export?node_id=${d.id}&devices=1`, download: "" },
+        el("span", {}, "Export site with device lists"), el("span", { class: "d" }, "Also every network's scan results"))));
+}
+document.addEventListener("click", (e) => { for (const id of ["#exportMenu", "#addMenu"]) { const m = $(id); if (m && m.open && !m.contains(e.target)) m.open = false; } });
+
+// Import from a file; if a site with the same name exists, ask Replace / Keep both / Cancel.
+async function importFromFile(file) {
+  let payload;
+  try { payload = JSON.parse(await file.text()); } catch (e) { flash("That file isn't a NetJoin export (not valid JSON)", "error"); return; }
+  const send = (mode) => api(`/import?on_conflict=${mode}`, { method: "POST", body: payload });
+  let r;
+  try { r = await send("ask"); }
+  catch (e) {
+    if (e.status !== 409) { flash(e.message, "error"); return; }
+    const choice = await askImportConflict(e.data.conflicts || []);
+    if (choice === "cancel") return;
+    try { r = await send(choice); } catch (e2) { flash(e2.message, "error"); return; }
+  }
+  flash(`Imported ${r.imported} item(s)${r.devices ? ` and ${r.devices} device(s)` : ""}` +
+    (r.replaced.length ? ` – replaced ${r.replaced.join(", ")}` : "") + (r.renamed.length ? ` – kept both copies of ${r.renamed.join(", ")}` : ""));
+  await refreshTree(); await refreshDetail(); refreshLog();
+}
+function askImportConflict(names) {
+  return new Promise((resolve) => {
+    const dlg = $("#importDlg");
+    $("#importMsg").textContent = names.length === 1 ? "You already have a site with this name:" : "You already have sites with these names:";
+    $("#importNames").replaceChildren(...names.map((n) => el("li", {}, n)));
+    const done = (c) => { dlg.close(); resolve(c); };
+    for (const b of dlg.querySelectorAll("[data-choice]")) b.onclick = () => done(b.dataset.choice);
+    dlg.oncancel = (e) => { e.preventDefault(); done("cancel"); };
+    dlg.showModal();
+  });
+}
 
 function renderHistory() {
   renderScanMenu(); refreshDevices();
@@ -920,11 +961,7 @@ $("#settingsForm").addEventListener("submit", async (e) => {
 });
 $("#cancelSettings").addEventListener("click", () => $("#settingsDlg").close());
 $("#importFile").addEventListener("change", async (e) => {
-  const file = e.target.files[0]; if (!file) return;
-  try { const payload = JSON.parse(await file.text()); const r = await api("/import", { method: "POST", body: payload });
-    $("#settingsErr").textContent = ""; flash(`Imported ${r.imported} items`); await refreshTree(); refreshLog(); }
-  catch (err) { $("#settingsErr").textContent = err.message; }
-  e.target.value = "";
+  const file = e.target.files[0]; if (file) { $("#settingsDlg").close(); await importFromFile(file); } e.target.value = "";
 });
 
 // ---------- log ----------
@@ -973,7 +1010,10 @@ $("#adapter").addEventListener("change", async (e) => {
 });
 $("#showAll").addEventListener("change", refreshAdapters);
 $("#search").addEventListener("input", renderTree);
-$("#addSiteBtn").addEventListener("click", () => openNode({ kind: "site" }));
+$("#newSiteBtn").addEventListener("click", () => { $("#addMenu").open = false; openNode({ kind: "site" }); });
+$("#importSiteFile").addEventListener("change", async (e) => {
+  const file = e.target.files[0]; $("#addMenu").open = false; if (file) await importFromFile(file); e.target.value = "";
+});
 $("#dhcpBtn").addEventListener("click", async (e) => {
   await withBusy(e.currentTarget, async () => { await api("/dhcp", { method: "POST" }); flash("Adapter set back to DHCP"); });
   await refreshStatus();   // after withBusy re-enables the button, so the DHCP state decides

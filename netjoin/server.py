@@ -17,7 +17,7 @@ from . import APP_NAME, __version__, paths
 from .engine import Engine, JoinError
 from .scan import ScanError, ScanManager
 from .scan import npcap as npcap_mod
-from .store import StoreError
+from .store import ImportConflict, StoreError
 
 ENGINE: Engine | None = None
 SCANS: ScanManager | None = None
@@ -62,6 +62,8 @@ def api(fn):
         data = await body(request) if request.method in ("POST", "PUT") else {}
         try:
             result = await run_in_threadpool(fn, request, data)
+        except ImportConflict as e:
+            return JSONResponse({"error": str(e), "conflicts": e.names}, status_code=409)
         except (StoreError, JoinError, ScanError) as e:
             return JSONResponse({"error": str(e)}, status_code=400)
         if isinstance(result, Response):
@@ -246,15 +248,34 @@ def put_global(req, data):
 
 
 def export(req, data):
-    payload = eng().store.export()
+    from datetime import date
+    import re
+    st = eng().store
+    nid = req.query_params.get("node_id")
+    payload = st.export(int(nid) if nid else None, include_devices=req.query_params.get("devices") == "1")
+    if nid:
+        name = re.sub(r"[^\w.-]+", "_", payload["sites"][0]["name"]).strip("_") or "site"
+        fname = f"NetJoin-site-{name}-{date.today()}.json"
+    else:
+        fname = f"NetJoin-all-sites-{date.today()}.json"
     return Response(json.dumps(payload, indent=2), media_type="application/json",
-                    headers={"Content-Disposition": 'attachment; filename="netjoin-sites.json"'})
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
 def import_(req, data):
-    n = eng().store.import_(data)
-    eng().log.add(f"Imported {n} sites / areas / networks")
-    return {"imported": n}
+    mode = req.query_params.get("on_conflict", "ask")
+    if mode not in ("ask", "replace", "keep"):
+        raise StoreError("on_conflict must be ask, replace or keep")
+    r = eng().store.import_(data, on_conflict=mode)
+    msg = f"Imported {r['imported']} site / area / network item(s)"
+    if r["devices"]:
+        msg += f" and {r['devices']} device(s)"
+    if r["replaced"]:
+        msg += f"; replaced {', '.join(r['replaced'])}"
+    if r["renamed"]:
+        msg += f"; kept both copies of {', '.join(r['renamed'])}"
+    eng().log.add(msg)
+    return r
 
 
 async def index(request):

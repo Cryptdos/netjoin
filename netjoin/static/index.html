@@ -35,7 +35,14 @@
     <ul class="tree" id="tree"></ul>
     <div class="spacer"></div>
     <div class="side-actions">
-      <button type="button" class="btn" id="addSiteBtn">+ Add site</button>
+      <details class="menu up" id="addMenu">
+        <summary class="btn" id="addSiteBtn">+ Add site ▾</summary>
+        <div class="menu-list" role="menu">
+          <button type="button" role="menuitem" id="newSiteBtn"><span>New site…</span><span class="d">Start an empty site</span></button>
+          <label class="menu-file" role="menuitem"><span>Import site(s) from file…</span><span class="d">A .json file exported from NetJoin</span>
+            <input type="file" id="importSiteFile" accept=".json,application/json" hidden></label>
+        </div>
+      </details>
       <button type="button" class="btn btn-outline" id="discoverBtn">Discover networks on the wire…</button>
     </div>
   </nav>
@@ -167,8 +174,9 @@
     <fieldset>
       <legend>Sites file</legend>
       <div class="row">
-        <a class="btn" href="/api/export" download>Export sites…</a>
+        <a class="btn" href="/api/export" download>Export all sites…</a>
         <label class="btn">Import sites… <input type="file" id="importFile" accept=".json,application/json" hidden></label>
+        <a class="btn" href="/api/export?devices=1" download title="Includes every network's device list">Export all with devices…</a>
       </div>
     </fieldset>
     <p class="error" id="settingsErr" role="alert"></p>
@@ -207,6 +215,19 @@
         <button type="button" class="btn small" id="discAgain">Run again</button></div>
       <div id="discList" class="disc-list"></div>
     </section>
+  </div>
+</dialog>
+
+<dialog id="importDlg">
+  <div class="dlg">
+    <h2>Site already exists</h2>
+    <p id="importMsg"></p>
+    <ul class="small" id="importNames"></ul>
+    <div class="row"><div class="spacer"></div>
+      <button type="button" class="btn" data-choice="cancel">Cancel</button>
+      <button type="button" class="btn" data-choice="keep" title="The imported site gets ' (2)' after its name">Keep both</button>
+      <button type="button" class="btn btn-primary" data-choice="replace" title="Delete the existing site and everything in it, then import">Replace</button>
+    </div>
   </div>
 </dialog>
 

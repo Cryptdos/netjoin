@@ -497,26 +497,100 @@ class Store:
         return n
 
     # ---------- import / export ----------
-    def export(self) -> dict:
+    EXPORT_FIELDS = ("kind", "name", "subnet", "range_start", "range_end", "gw_override", "gateway",
+                     "dns_override", "dns", "notes", "addr_mode", "fixed_ip", "alloc")
+    DEVICE_FIELDS = ("key", "ip", "mac", "ping_ms", "bacnet_instance", "bacnet_vendor_id", "vendor", "mac_vendor",
+                     "name", "model", "route", "ports", "sources", "first_seen", "last_seen")
+
+    def export(self, node_id: int | None = None, include_devices: bool = False) -> dict:
+        """Format 2. node_id = one site (plan item 1); None = everything."""
         def strip(n):
-            out = {k: n[k] for k in ("kind", "name", "subnet", "range_start", "range_end", "gw_override",
-                                     "gateway", "dns_override", "dns", "notes") if n.get(k) not in (None, "")}
+            out = {k: n[k] for k in self.EXPORT_FIELDS if n.get(k) not in (None, "")}
             if n["children"]:
                 out["children"] = [strip(c) for c in n["children"]]
             return out
-        return {"app": "NetJoin", "format": 1, "exported": now(), "sites": [strip(s) for s in self.tree()]}
+        sites = self.tree()
+        if node_id is not None:
+            sites = [x for x in sites if x["id"] == node_id]
+            if not sites:
+                raise StoreError("Only a whole site can be exported")
+        payload = {"app": "NetJoin", "format": 2, "exported": now(), "scope": "site" if node_id else "all",
+                   "sites": [strip(x) for x in sites]}
+        if include_devices:
+            subnets = sorted({n["subnet"] for x in sites for n in self.networks_under(x["id"])})
+            payload["devices"] = {sn: [{k: d[k] for k in self.DEVICE_FIELDS if d.get(k) is not None}
+                                       for d in self.devices(sn)] for sn in subnets}
+        return payload
 
-    def import_(self, payload: dict) -> int:
+    def site_names(self) -> set[str]:
+        return {r["name"] for r in self.db.execute("SELECT name FROM nodes WHERE kind='site'")}
+
+    def import_(self, payload: dict, on_conflict: str = "keep") -> dict:
+        """Import sites from a format 1 or 2 file.
+
+        on_conflict when a site with the same name exists:
+          'ask'     → raise ImportConflict listing the names (nothing imported)
+          'replace' → delete the existing site (and everything under it) first
+          'keep'    → keep both; the imported one becomes "Name (2)"
+        """
         if payload.get("app") != "NetJoin" or not isinstance(payload.get("sites"), list):
             raise StoreError("Not a NetJoin export file")
+        if payload.get("format", 1) > 2:
+            raise StoreError("This file is from a newer NetJoin – update NetJoin to import it")
+        existing = self.site_names()
+        clashes = [x.get("name") for x in payload["sites"] if x.get("name") in existing]
+        if clashes and on_conflict == "ask":
+            raise ImportConflict(clashes)
         count = 0
 
         def add(n, parent_id):
             nonlocal count
-            created = self.create_node(n.get("kind", "site"), parent_id, n)
+            created = self.create_node(n.get("kind", "site" if parent_id is None else "area"), parent_id, n)
             count += 1
             for c in n.get("children", []):
                 add(c, created["id"])
-        for s in payload["sites"]:
-            add(s, None)
-        return count
+
+        for site in payload["sites"]:
+            site = dict(site, kind="site")
+            if site.get("name") in existing:
+                if on_conflict == "replace":
+                    for r in self.db.execute("SELECT id FROM nodes WHERE kind='site' AND name=?", (site["name"],)).fetchall():
+                        self.delete_node(r["id"])
+                else:
+                    base, i = site["name"], 2
+                    while f"{base} ({i})" in existing:
+                        i += 1
+                    site["name"] = f"{base} ({i})"
+            add(site, None)
+            existing = self.site_names()
+        devices = 0
+        for subnet, rows in (payload.get("devices") or {}).items():
+            for d in rows:
+                devices += self._import_device(subnet, d)
+        return {"imported": count, "devices": devices, "replaced": clashes if on_conflict == "replace" else [],
+                "renamed": clashes if on_conflict != "replace" else []}
+
+    def _import_device(self, subnet: str, d: dict) -> int:
+        """Add a device from a file; if we already know it, keep whichever was seen more recently."""
+        if not d.get("key") or not d.get("ip"):
+            return 0
+        row = self.db.execute("SELECT last_seen FROM devices WHERE subnet=? AND key=?", (subnet, d["key"])).fetchone()
+        if row and (row["last_seen"] or "") >= (d.get("last_seen") or ""):
+            return 0
+        cols = {k: d.get(k) for k in self.DEVICE_FIELDS}
+        cols["subnet"] = subnet
+        cols["sources"] = ",".join(x for x in (cols.get("sources") or "").split(",") if x and x != "self") or None
+        if not cols["sources"]:
+            return 0                       # someone else's "This PC" row: not useful here
+        with self._lock:
+            self.db.execute(f"INSERT INTO devices({','.join(cols)}) VALUES({','.join('?' * len(cols))}) "
+                            f"ON CONFLICT(subnet,key) DO UPDATE SET " + ",".join(f"{k}=excluded.{k}" for k in cols if k not in ("subnet", "key")),
+                            tuple(cols.values()))
+            self.db.commit()
+        return 1
+
+
+class ImportConflict(StoreError):
+    def __init__(self, names: list[str]):
+        self.names = names
+        super().__init__(f"A site called {', '.join(repr(n) for n in names)} already exists")

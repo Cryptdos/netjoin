@@ -284,8 +284,35 @@ class StoreAndJoin(unittest.TestCase):
         self.assertEqual({n["id"] for n in self.store.networks_under(self.area["id"])}, {self.net["id"], other["id"], twin["id"]})
 
     def test_export_import_roundtrip(self):
-        payload = self.store.export()
-        self.assertEqual(self.store.import_(payload), 3)
+        from netjoin.store import ImportConflict
+        self.store.update_node(self.net["id"], {"addr_mode": "fixed", "fixed_ip": "39", "alloc": "last"})
+        self.store.upsert_device("10.20.5.0/24", "10.20.5.10", "10.20.5.10", "bacnet", bacnet_instance=2501, name="AS01")
+        site_id = self.area["parent_id"]
+        payload = self.store.export(site_id, include_devices=True)
+        self.assertEqual((payload["format"], payload["scope"], len(payload["sites"])), (2, "site", 1))
+        self.assertIn("10.20.5.0/24", payload["devices"])
+        with self.assertRaises(ImportConflict) as cm:                       # same name: ask first
+            self.store.import_(payload, on_conflict="ask")
+        self.assertEqual(cm.exception.names, ["Site"])
+        r = self.store.import_(payload, on_conflict="keep")
+        self.assertEqual((r["imported"], r["renamed"]), (3, ["Site"]))
+        self.assertIn("Site (2)", self.store.site_names())
+        net2 = [n for n in self.store.networks_under([x for x in self.store.tree() if x["name"] == "Site (2)"][0]["id"])][0]
+        self.assertEqual((net2["addr_mode"], net2["fixed_ip"], net2["alloc"]), ("fixed", "10.20.5.39", "last"))
+        r = self.store.import_(payload, on_conflict="replace")              # replaces "Site", keeps "Site (2)"
+        self.assertEqual(sorted(self.store.site_names()), ["Site", "Site (2)"])
+        self.assertEqual(len([x for x in self.store.tree() if x["name"] == "Site"]), 1)
+
+    def test_import_old_format_and_devices(self):
+        old = {"app": "NetJoin", "format": 1, "sites": [{"kind": "site", "name": "Old", "children": [
+            {"kind": "network", "name": "N", "subnet": "10.9.9.0/24"}]}]}
+        self.assertEqual(self.store.import_(old, on_conflict="ask")["imported"], 2)
+        dev = {"app": "NetJoin", "format": 2, "sites": [], "devices": {"10.9.9.0/24": [
+            {"key": "10.9.9.10", "ip": "10.9.9.10", "sources": "arp", "last_seen": "2026-01-01T00:00:00.000+00:00"},
+            {"key": "10.9.9.200", "ip": "10.9.9.200", "sources": "self", "last_seen": "2026-01-01T00:00:00.000+00:00"}]}}
+        self.assertEqual(self.store.import_(dev)["devices"], 1)              # someone else's This PC is skipped
+        with self.assertRaisesRegex(StoreError, "newer NetJoin"):
+            self.store.import_({"app": "NetJoin", "format": 3, "sites": []})
 
 
 if __name__ == "__main__":
