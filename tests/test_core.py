@@ -286,8 +286,7 @@ class StoreAndJoin(unittest.TestCase):
                          (1, 2, 2, 1, 1, 1))
         self.assertEqual({v["name"] for v in st["vendors"]}, {"Siemens", "Intel"})
         self.assertEqual(st["most_visited"]["name"], "Site")
-        self.assertEqual([x["id"] for x in h["attention"]["never_scanned"]], [never["id"]])
-        self.assertEqual(h["attention"]["clashes"][0]["ip"], "10.20.5.200")
+        self.assertEqual(list(h["attention"]), ["inactive"])            # only inactive devices are flagged
 
     def test_rollup_by_node(self):
         other = self.store.create_node("network", self.area["id"], {"name": "AHU", "subnet": "10.20.6.0/24"})

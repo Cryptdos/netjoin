@@ -565,11 +565,6 @@ class Store:
             k = sum(1 for d in devs_by_subnet.get(n["subnet"], []) if d["inactive"])
             if k:
                 inactive.append({"id": n["id"], "path": path(n["id"]), "count": k})
-        never = [{"id": n["id"], "path": path(n["id"]), "subnet": n["subnet"]} for n in networks
-                 if not last_scan.get(n["subnet"]) and not devs_by_subnet.get(n["subnet"])]
-        clash_counts = Counter((h["network_id"], h["ip"]) for h in hist if h["result"] == "clashed" and h["ts"] >= week_ago)
-        clashes = [{"id": nid, "path": path(nid), "ip": ip, "count": c} for (nid, ip), c in clash_counts.most_common(10)
-                   if nid in nodes]
 
         # stats
         all_devs = [d for ds in devs_by_subnet.values() for d in ds]
@@ -594,7 +589,7 @@ class Store:
             "since": min(firsts) if firsts else None,
         }
         return {"recent": recent, "sites": sites,
-                "attention": {"inactive": inactive, "never_scanned": never, "clashes": clashes}, "stats": stats}
+                "attention": {"inactive": inactive}, "stats": stats}
 
     # ---------- import / export ----------
     EXPORT_FIELDS = ("kind", "name", "subnet", "range_start", "range_end", "gw_override", "gateway",

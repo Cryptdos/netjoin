@@ -322,7 +322,10 @@ table.dev tr.inactive .port{opacity:.5}
 .crumb.crumb-here{cursor:default;color:var(--text);font-weight:600;padding:2px 4px}
 .crumb-menu{border:0;background:none;font:inherit;font-size:11px;color:var(--muted);cursor:pointer;padding:2px 5px;border-radius:4px;min-width:20px}
 .crumb-menu:hover,.crumb-menu[aria-expanded="true"]{background:var(--bg);color:var(--text)}
-.crumb-menu.forward{color:var(--accent-d);font-weight:600;font-size:12px;padding:2px 8px;background:var(--accent-bg)}
+.crumb-menu.forward{color:var(--accent-d);font-weight:600;padding:2px 8px;background:var(--accent-bg)}
+.crumb-menu .chev{display:inline-block;font-size:14px;line-height:1;transition:transform .12s}
+.crumb-menu[aria-expanded="true"] .chev{transform:rotate(90deg)}
+@media (prefers-reduced-motion: reduce){.crumb-menu .chev{transition:none}}
 .crumb-pop{position:fixed;z-index:60;min-width:260px;max-width:min(420px,92vw);overflow-y:auto;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 28px rgba(0,0,0,.16);padding:6px;display:flex;flex-direction:column}
 .crumb-pop button{display:grid;grid-template-columns:52px minmax(0,1fr) auto;align-items:center;gap:8px;border:0;background:none;font:inherit;text-align:left;padding:7px 10px;border-radius:6px;cursor:pointer}
 .crumb-pop button:hover,.crumb-pop button:focus-visible{background:var(--bg);outline:none}

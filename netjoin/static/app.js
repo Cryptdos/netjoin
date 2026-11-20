@@ -289,7 +289,8 @@ function crumbBar(d) {
       nav.append(el("button", { type: "button", class: "crumb-menu" + (last ? " forward" : ""),
         "aria-haspopup": "menu", "aria-label": last ? `Go into ${c.name}` : `Other items in ${c.name}`,
         title: last ? `What's inside ${c.name}` : `Everything in ${c.id === "home" ? "Home" : c.name}`,
-        onclick: (e) => openCrumbMenu(e.currentTarget, kids, next ? next.id : null) }, last ? "›▾" : "▾"));
+        "aria-expanded": "false",
+        onclick: (e) => openCrumbMenu(e.currentTarget, kids, next ? next.id : null) }, el("span", { class: "chev", "aria-hidden": "true" }, "›")));
     } else if (!last) {
       nav.append(el("span", { class: "sep", "aria-hidden": "true" }, "›"));
     }
@@ -303,6 +304,7 @@ function houseIcon() {
   return sv;
 }
 function openCrumbMenu(btn, items, currentId) {
+  if (crumbMenuBtn === btn) { closeCrumbMenu(); return; }   // second click closes it
   closeCrumbMenu();
   const pop = el("div", { class: "crumb-pop", id: "crumbPop", role: "menu" },
     items.map((n) => el("button", { type: "button", role: "menuitem", class: n.id === currentId ? "here" : null,
@@ -320,7 +322,7 @@ function openCrumbMenu(btn, items, currentId) {
 }
 let crumbMenuBtn = null;
 function closeCrumbMenu() { const p = $("#crumbPop"); if (p) p.remove(); if (crumbMenuBtn) crumbMenuBtn.setAttribute("aria-expanded", "false"); crumbMenuBtn = null; }
-document.addEventListener("click", (e) => { const p = $("#crumbPop"); if (p && !p.contains(e.target) && e.target !== crumbMenuBtn) closeCrumbMenu(); });
+document.addEventListener("click", (e) => { const p = $("#crumbPop"); if (p && !p.contains(e.target) && !(crumbMenuBtn && crumbMenuBtn.contains(e.target))) closeCrumbMenu(); });
 document.addEventListener("keydown", (e) => {
   const p = $("#crumbPop"); if (!p) return;
   const items = [...p.querySelectorAll("button")]; const i = items.indexOf(document.activeElement);
@@ -394,13 +396,7 @@ async function renderHome() {
   for (const x of at.inactive) att.push(el("li", {}, el("span", { class: "gone" }, "●"), el("div", { class: "grow" },
     el("button", { type: "button", class: "linkish", onclick: () => openMissing(x.id) }, x.path),
     el("span", { class: "sub2" }, `${x.count} device${x.count === 1 ? "" : "s"} not seen in the latest scan`))));
-  for (const x of at.clashes) att.push(el("li", {}, el("span", { class: "warn-dot" }, "●"), el("div", { class: "grow" },
-    el("button", { type: "button", class: "linkish", onclick: () => goTo(x.id) }, x.path),
-    el("span", { class: "sub2" }, `${x.ip} was in use ${x.count}× this week – worth telling site IT?`))));
-  for (const x of at.never_scanned) att.push(el("li", {}, el("span", { class: "muted" }, "○"), el("div", { class: "grow" },
-    el("button", { type: "button", class: "linkish", onclick: () => goTo(x.id) }, x.path),
-    el("span", { class: "sub2" }, `${x.subnet} · never scanned`))));
-  const attention = att.length ? el("ul", { class: "hlist attn" }, att) : el("p", { class: "muted" }, "Nothing needs attention.");
+  const attention = att.length ? el("ul", { class: "hlist attn" }, att) : el("p", { class: "muted" }, "Nothing needs attention – every device was seen in its latest scan.");
 
   // Stats
   const S = h.stats;
