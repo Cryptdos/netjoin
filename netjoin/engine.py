@@ -25,35 +25,77 @@ class Engine:
         self.internet_cache: dict[str, Any] = {}
 
     # ---------- adapters ----------
-    def selected_adapter_name(self) -> str | None:
-        name = self.store.get_setting("adapter")
-        names = [a.name for a in self.backend.list_adapters()]
-        if name in names:
-            return name
-        physical = [a for a in self.backend.list_adapters() if not a.virtual]
+    @staticmethod
+    def _norm_mac(mac: str | None) -> str:
+        return (mac or "").replace(":", "-").upper()
+
+    def _pick(self) -> tuple[Adapter | None, dict | None]:
+        """The selected adapter, followed by MAC so a USB dongle is found whatever Windows calls it.
+
+        → (adapter, missing) – missing = {'name', 'mac'} when the chosen adapter is unplugged.
+        """
+        adapters = self.backend.list_adapters()
+        name, mac = self.store.get_setting("adapter"), self._norm_mac(self.store.get_setting("adapter_mac"))
+        if mac:
+            for a in adapters:
+                if self._norm_mac(a.mac) == mac:
+                    if a.name != name:      # same dongle, new name (different USB port)
+                        self.store.set_setting("adapter", a.name)
+                        self._renamed = f"USB adapter reconnected as {a.name}" + (f" (was {name})" if name else "")
+                        self.log.add(self._renamed)
+                    return a, None
+            return None, {"name": name, "mac": mac}
+        if name:
+            for a in adapters:
+                if a.name == name:
+                    if a.mac:               # upgrade from 0.5: remember its MAC from now on
+                        self.store.set_setting("adapter_mac", a.mac)
+                    return a, None
+        physical = [a for a in adapters if not a.virtual]
         wired = [a for a in physical if "wi-fi" not in a.name.lower() and "wireless" not in a.description.lower()]
         pick = (wired or physical or [None])[0]
-        return pick.name if pick else None
+        return pick, None
+
+    def select_adapter(self, name: str) -> Adapter:
+        a = self.backend.get_adapter(name)
+        if not a:
+            raise JoinError("Unknown adapter")
+        self.store.set_setting("adapter", a.name)
+        self.store.set_setting("adapter_mac", a.mac or None)
+        return a
+
+    def selected_adapter_name(self) -> str | None:
+        a, _ = self._pick()
+        return a.name if a else None
 
     def adapter(self, name: str | None = None) -> Adapter:
-        name = name or self.selected_adapter_name()
-        a = self.backend.get_adapter(name) if name else None
+        if name:
+            a = self.backend.get_adapter(name)
+            if a:
+                return a
+        a, missing = self._pick()
+        if missing:
+            raise JoinError(f"{missing['name'] or 'The chosen adapter'} is unplugged – plug the adapter back in, "
+                            "or pick another one at the top")
         if not a:
             raise JoinError("Pick a network adapter first")
         return a
 
     def status(self) -> dict:
-        name = self.selected_adapter_name()
-        a = self.backend.get_adapter(name) if name else None
+        a, missing = self._pick()
+        name = a.name if a else None
         applied = self.store.get_setting("applied")
         last = self.store.get_setting("last_network")
         current = None
         if a and applied and applied.get("adapter") == a.name and a.primary and a.primary.ip == applied.get("ip"):
             current = applied
+        renamed, self._renamed = getattr(self, "_renamed", None), None
         return {
             "backend": self.backend.kind,
             "admin": self.backend.is_admin(),
             "adapter": a.to_dict() if a else None,
+            "adapter_missing": missing,
+            "adapter_renamed": renamed,
             "primary": a.primary.__dict__ if a and a.primary else None,
             "joined": current,
             "last_network": last,

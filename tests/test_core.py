@@ -176,6 +176,21 @@ class StoreAndJoin(unittest.TestCase):
         self.assertEqual(self.engine.join(self.net["id"])["ip"], "10.20.5.202")
         self.assertEqual(self.engine.candidates(n, "10.20.5.201"), ["10.20.5.201"])   # clicking it in history still works
 
+    def test_adapter_followed_by_mac(self):
+        be = self.engine.backend
+        self.engine.select_adapter("Ethernet 2")
+        dongle = be.unplug("Ethernet 2")
+        st = self.engine.status()
+        self.assertIsNone(st["adapter"])
+        self.assertEqual(st["adapter_missing"]["name"], "Ethernet 2")
+        with self.assertRaisesRegex(JoinError, "unplugged"):
+            self.engine.join(self.net["id"])
+        be.plug(dongle, new_name="Ethernet 4")          # same MAC, new name (different USB port)
+        st = self.engine.status()
+        self.assertEqual(st["adapter"]["name"], "Ethernet 4")
+        self.assertIn("reconnected as Ethernet 4", st["adapter_renamed"])
+        self.assertIsNone(self.engine.status()["adapter_renamed"])     # only reported once
+
     def test_gateway_inheritance(self):
         self.store.set_setting("global", {"gw_override": 1, "gateway": "10.20.5.1", "dns_override": 1, "dns": "1.1.1.1"})
         r = self.store.resolve_gateway_dns(self.net["id"])
@@ -211,6 +226,15 @@ class StoreAndJoin(unittest.TestCase):
         self.assertTrue(any("self" in (d["sources"] or "") for d in devs))
         with self.assertRaises(ScanError):
             scans.start("passive", self.net["id"])     # needs Npcap
+        # Join again on another address: the old "This PC" row goes at the next scan
+        self.engine.join(self.net["id"], ip="10.20.5.240")
+        scans.start("arp", self.net["id"])
+        for _ in range(100):
+            if not scans.status()["running"]:
+                break
+            time.sleep(0.05)
+        selfs = [d["ip"] for d in self.store.devices("10.20.5.0/24") if "self" in (d["sources"] or "")]
+        self.assertEqual(selfs, ["10.20.5.240"])
 
     def test_export_import_roundtrip(self):
         payload = self.store.export()

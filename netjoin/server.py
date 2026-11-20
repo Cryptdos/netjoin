@@ -90,11 +90,8 @@ def adapters(req, data):
 
 
 def select_adapter(req, data):
-    name = data.get("name")
-    if not eng().backend.get_adapter(name or ""):
-        raise JoinError("Unknown adapter")
-    eng().store.set_setting("adapter", name)
-    eng().log.add(f"Adapter selected: {name}")
+    a = eng().select_adapter(data.get("name") or "")
+    eng().log.add(f"Adapter selected: {a.name}" + (f" ({a.description})" if a.description else ""))
     return {"ok": True}
 
 
@@ -180,7 +177,7 @@ def scan_cancel(req, data):
 
 
 def discover_start(req, data):
-    return SCANS.start_discover(int(data.get("seconds", 20)), bool(data.get("whois", True)))
+    return SCANS.start_discover(int(data.get("seconds", 20)), bool(data.get("whois", True)), data.get("adapter") or None)
 
 
 def discover_status(req, data):

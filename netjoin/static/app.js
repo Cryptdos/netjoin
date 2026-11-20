@@ -114,9 +114,13 @@ function flash(msg, level = "info", opts = {}) {
 async function refreshStatus() {
   try { state.status = await api("/status"); } catch (e) { return; }
   const s = state.status;
+  if (s.adapter_renamed) { flash(s.adapter_renamed); refreshAdapters(); }
+  const wasMissing = refreshStatus.missing; refreshStatus.missing = !!s.adapter_missing;
+  if (wasMissing !== undefined && wasMissing !== refreshStatus.missing) refreshAdapters();   // unplugged / back
   $("#ver").textContent = s.backend === "fake" ? "DEMO MODE – no real changes" : "";
   const cur = $("#current"); cur.replaceChildren();
-  if (!s.adapter) { cur.append(el("span", { class: "muted" }, "No adapter selected")); }
+  if (s.adapter_missing) { cur.append(el("span", { class: "inet warn" }, `${s.adapter_missing.name || "Adapter"} unplugged – plug it back in`)); }
+  else if (!s.adapter) { cur.append(el("span", { class: "muted" }, "No adapter selected")); }
   else {
     const p = s.primary;
     cur.append(el("span", { class: "small muted" }, "Current"),
@@ -147,10 +151,12 @@ async function refreshStatus() {
 
 async function refreshAdapters() {
   const list = await api("/adapters" + ($("#showAll").checked ? "?all=1" : ""));
-  const sel = $("#adapter"); const current = state.status && state.status.adapter && state.status.adapter.name;
-  sel.replaceChildren(...list.map((a) => el("option", { value: a.name, selected: a.name === current },
+  const sel = $("#adapter"); const st = state.status || {};
+  const current = st.adapter && st.adapter.name; const missing = st.adapter_missing;
+  sel.replaceChildren(...list.map((a) => el("option", { value: a.name, selected: !missing && a.name === current },
     `${a.name}${a.description ? " – " + a.description : ""}${a.up ? "" : " (disconnected)"}`)));
-  if (current && !list.some((a) => a.name === current)) sel.prepend(el("option", { value: current, selected: true }, current));
+  if (missing) sel.prepend(el("option", { value: "", selected: true, disabled: true }, `${missing.name || "Chosen adapter"} (unplugged)`));
+  else if (current && !list.some((a) => a.name === current)) sel.prepend(el("option", { value: current, selected: true }, current));
 }
 
 // ---------- tree ----------
@@ -406,8 +412,7 @@ function discShow(view) { for (const v of ["discSetup", "discRunning", "discResu
 
 $("#discoverBtn").addEventListener("click", async () => {
   const r = await api("/discover").catch(() => null);
-  const s = state.status || {};
-  $("#discAdapter").textContent = s.adapter ? `Runs from ${s.adapter.name}${s.primary ? ` (currently ${s.primary.ip}/${s.primary.prefix})` : ""}. Change the adapter at the top if that's not the BMS cable.` : "Pick an adapter at the top first.";
+  await fillDiscAdapters();
   const note = $("#discNpcapNote");
   if (r && !r.npcap && !r.demo) {
     note.hidden = false;
@@ -419,11 +424,33 @@ $("#discoverBtn").addEventListener("click", async () => {
   else discShow("discSetup");
 });
 $("#discoverClose").addEventListener("click", () => $("#discoverDlg").close());
+
+const isWifi = (a) => /wi-?fi|wireless|wlan|802\.11/i.test(`${a.name} ${a.description}`);
+async function fillDiscAdapters() {
+  const list = await api("/adapters").catch(() => []);
+  disc.adapters = list;
+  const sel = $("#discAdapterSel"); const st = state.status || {};
+  const top = st.adapter && st.adapter.name;
+  // default: the adapter chosen at the top, unless it's Wi-Fi and a wired one is available
+  const wired = list.filter((a) => !isWifi(a));
+  const pick = list.find((a) => a.name === top && !isWifi(a)) || wired.find((a) => a.up) || wired[0] || list[0];
+  sel.replaceChildren(...list.map((a) => el("option", { value: a.name, selected: pick && a.name === pick.name },
+    `${a.name}${a.description ? " – " + a.description : ""}${a.up ? "" : " (disconnected)"}`)));
+  discAdapterChanged();
+}
+function discAdapterChanged() {
+  const a = (disc.adapters || []).find((x) => x.name === $("#discAdapterSel").value);
+  $("#discWifiNote").hidden = !(a && isWifi(a));
+  const p = a && a.addresses && (a.addresses.find((x) => !x.ip.startsWith("169.254.")) || a.addresses[0]);
+  $("#discAdapter").textContent = a ? `Currently ${p ? `${p.ip}/${p.prefix}` : "no IPv4 address"}${a.dhcp ? " (DHCP)" : ""}.` : "";
+}
+$("#discAdapterSel").addEventListener("change", discAdapterChanged);
 $("#discAgain").addEventListener("click", () => discShow("discSetup"));
 $("#discCancel").addEventListener("click", () => api("/scan/cancel", { method: "POST" }).catch(() => {}));
 $("#discStart").addEventListener("click", async (e) => {
   try {
-    await api("/discover", { method: "POST", body: { seconds: Number($("#discSeconds").value), whois: $("#discWhois").checked } });
+    await api("/discover", { method: "POST", body: { seconds: Number($("#discSeconds").value), whois: $("#discWhois").checked,
+      adapter: $("#discAdapterSel").value } });
   } catch (err) { flash(err.message, "error"); return; }
   discShow("discRunning"); discPoll();
 });
@@ -456,8 +483,8 @@ function renderDiscover(res) {
   const list = $("#discList");
   if (!res) { list.replaceChildren(); return; }
   $("#discSummary").textContent = `Finished ${res.finished} from ${res.adapter} (${res.src_ip})` +
-    (res.npcap && !res.npcap_error ? " · listened with Npcap" : res.npcap_error ? " · Npcap failed" : " · no Npcap") +
-    (res.whois && res.whois_to && res.whois_to.length ? ` · Who-Is to ${res.whois_to.join(" and ")}` : "");
+    (res.npcap_error ? " · Npcap failed" : res.npcap ? "" : " · no Npcap") +
+    (res.methods && res.methods.length ? ` · ${res.methods.join(" · ")}` : "");
   const notes = [];
   if (res.npcap_error) notes.push(el("p", { class: "note-warn" }, `Npcap couldn't listen on this adapter, so only the BACnet Who-Is ran. ${res.npcap_error}`));
   if (!res.subnets.length) {
@@ -473,7 +500,8 @@ function renderDiscover(res) {
 
 function discCard(r) {
   const card = el("div", { class: "dcard" });
-  const pill = r.confidence === "high" ? el("span", { class: "pill yes" }, "mask from broadcasts") : el("span", { class: "pill guess" }, "guessed /24");
+  const pill = el("span", { class: "pill " + (r.confidence === "broadcast" || r.confidence === "adapter" ? "yes" : "guess") },
+    r.confidence_label || r.confidence);
   const counts = `${r.host_count} device(s)${r.bacnet_count ? ` · ${r.bacnet_count} BACnet` : ""}`;
   const hostTable = el("table", {}, el("thead", {}, el("tr", {}, ["IP", "MAC", "Maker", "BACnet"].map((h) => el("th", {}, h)))),
     el("tbody", {}, r.hosts.map((h) => el("tr", {}, el("td", { class: "mono" }, h.ip), el("td", { class: "mono" }, h.mac || "—"),
@@ -483,7 +511,7 @@ function discCard(r) {
   card.append(
     el("div", { class: "row" }, el("h3", {}, r.subnet), pill, el("span", { class: "small muted" }, counts), el("div", { class: "spacer" }), actions),
     el("div", { class: "meta" }, r.evidence.join(" · ") +
-      (r.gateway_hint ? ` · devices ARP for ${r.gateway_hint}, probably the gateway (NetJoin leaves the gateway off unless you set it)` : "")),
+      (r.gateway_hint ? ` · likely gateway ${r.gateway_hint} (${r.gateway_from || "seen"}; NetJoin leaves the gateway off unless you set it)` : "")),
     el("div", { class: "meta" }, `Suggested laptop range ${r.range_start} – ${r.range_end}` +
       (r.range_clashes ? ` (${r.range_clashes} device(s) seen inside it – Join will skip them)` : " (no devices seen there)")),
     ...(!r.contains_me ? [el("div", { class: "meta hint" }, "Join and scan to identify BACnet devices – from a different subnet, controllers that reply directly to the laptop can't be heard.")] : []),

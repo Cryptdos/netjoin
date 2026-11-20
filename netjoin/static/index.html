@@ -179,6 +179,10 @@
           <select id="discSeconds"><option value="10">10 s</option><option value="20" selected>20 s</option><option value="30">30 s</option><option value="60">60 s</option></select></label>
         <label class="check"><input type="checkbox" id="discWhois" checked> Also send a BACnet Who-Is (recommended)</label>
       </div>
+      <div class="row">
+        <label class="inline">Adapter <select id="discAdapterSel"></select></label>
+      </div>
+      <p class="note-warn" id="discWifiNote" hidden>You've picked a Wi-Fi adapter. Discover usually needs the adapter with the BMS cable plugged in.</p>
       <p class="small muted" id="discAdapter"></p>
       <div class="row"><div class="spacer"></div><button type="button" class="btn btn-primary" id="discStart">Start</button></div>
     </section>

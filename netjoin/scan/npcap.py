@@ -94,6 +94,19 @@ def arp_sweep(adapter_name: str, src_ip: str, cidr: str, timeout: float = 2.0, m
     return {r.psrc: r.hwsrc.upper().replace(":", "-") for _s, r in ans}
 
 
+def send_raw_whois(adapter_name: str, src_ip: str, mac: str | None = None) -> None:
+    """Send one BACnet Who-Is as a raw Ethernet broadcast on exactly this adapter.
+
+    Unlike a normal socket broadcast to 255.255.255.255, Windows routing can't pick a
+    different adapter (Wi-Fi, Hyper-V, VPN) for it.
+    """
+    sc = _load()
+    iface = _iface(sc, adapter_name, src_ip, mac)
+    frame = (sc.Ether(dst="ff:ff:ff:ff:ff:ff") / sc.IP(src=src_ip, dst="255.255.255.255", ttl=64) /
+             sc.UDP(sport=bacnet.BACNET_PORT, dport=bacnet.BACNET_PORT) / sc.Raw(load=bacnet.WHO_IS))
+    sc.sendp(frame, iface=iface, verbose=0)
+
+
 def passive_listen(adapter_name: str, src_ip: str, seconds: float, cancel, broad: bool = False,
                    mac: str | None = None) -> dict:
     """Listen without sending anything.

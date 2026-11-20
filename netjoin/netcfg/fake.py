@@ -29,6 +29,17 @@ class FakeBackend(Backend):
         env = os.environ.get("NETJOIN_FAKE_TAKEN")
         self._taken = {x.strip() for x in env.split(",")} if env else None
 
+    def unplug(self, name: str):
+        """Demo/test helper: remove an adapter as if a USB dongle was pulled out."""
+        with self._lock:
+            return self._adapters.pop(name, None)
+
+    def plug(self, adapter, new_name: str | None = None):
+        with self._lock:
+            if new_name:
+                adapter.name = new_name
+            self._adapters[adapter.name] = adapter
+
     def _is_taken(self, ip: str) -> bool:
         if self._taken is not None:
             return ip in self._taken

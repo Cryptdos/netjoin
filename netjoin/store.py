@@ -369,6 +369,14 @@ class Store:
                 self.db.execute(f"UPDATE devices SET {sets} WHERE id=?", (*upd.values(), row["id"]))
             self.db.commit()
 
+    def remove_old_self(self, subnet: str, current_key: str) -> int:
+        """Drop "This PC" rows left from addresses the laptop used before on this subnet."""
+        with self._lock:
+            n = self.db.execute("DELETE FROM devices WHERE subnet=? AND key<>? AND ','||sources||',' LIKE '%,self,%'",
+                                (subnet, current_key)).rowcount
+            self.db.commit()
+        return n
+
     def devices(self, subnet: str) -> list[dict]:
         rows = [dict(r) for r in self.db.execute("SELECT * FROM devices WHERE subnet=?", (subnet,))]
 

@@ -82,11 +82,49 @@ def suggest_range(net: ipaddress.IPv4Network, used: set[str]) -> tuple[str, str,
     return start, end, len(inside)
 
 
-def analyse(obs: dict, own_ip: str, known_subnets: dict[str, list[dict]] | None = None) -> list[dict]:
+def _cluster_24s(ips: list[str]) -> list[tuple[ipaddress.IPv4Network, str]]:
+    """Group addresses with no other evidence: /24 each, but neighbouring /24s that fit in a /22
+    or smaller become one network ("covers all devices")."""
+    nets24 = sorted({ipaddress.IPv4Network(f"{ip}/24", strict=False) for ip in ips}, key=lambda n: int(n.network_address))
+    out, cluster = [], []
+    for n in nets24:
+        trial = cluster + [n]
+        if cluster:
+            sup = _supernet(trial)
+            if sup.prefixlen >= 22:
+                cluster = trial
+                continue
+            out.append(cluster)
+        cluster = [n]
+    if cluster:
+        out.append(cluster)
+    return [(_supernet(c), "cover" if len(c) > 1 else "guess") for c in out]
+
+
+def _supernet(nets: list[ipaddress.IPv4Network]) -> ipaddress.IPv4Network:
+    lo = min(int(n.network_address) for n in nets)
+    hi = max(int(n.broadcast_address) for n in nets)
+    p = 32
+    while p > 0:
+        cand = ipaddress.IPv4Network(f"{ipaddress.IPv4Address(lo)}/{p}", strict=False)
+        if int(cand.network_address) <= lo and int(cand.broadcast_address) >= hi:
+            return cand
+        p -= 1
+    return ipaddress.IPv4Network("0.0.0.0/0")
+
+
+CONFIDENCE_LABEL = {"broadcast": "mask from broadcasts", "adapter": "mask from your adapter",
+                    "cover": "guessed – covers all devices", "guess": "guessed /24"}
+
+
+def analyse(obs: dict, own_ip: str, known_subnets: dict[str, list[dict]] | None = None,
+            own: dict | None = None) -> list[dict]:
     """Turn raw observations into candidate subnets.
 
     obs = {'hosts': {ip: mac}, 'bacnet': [dev], 'bcast_sources': {bcast: [src]}, 'arp_asks': {target: [askers]}}
     known_subnets = {'10.20.5.0/24': [{'id':…, 'name':…, 'path':…}]} for networks already saved.
+    own = {'net': '192.168.0.0/22', 'source': 'DHCP lease' | 'adapter settings', 'gateway': ip | None}:
+          the scanning adapter's own address. Evidence order: broadcasts > own adapter > neighbours > /24.
     """
     known_subnets = known_subnets or {}
     hosts = {ip: mac for ip, mac in obs.get("hosts", {}).items() if _usable(ip, own_ip)}
@@ -94,8 +132,8 @@ def analyse(obs: dict, own_ip: str, known_subnets: dict[str, list[dict]] | None 
     for d in bac:
         hosts.setdefault(d["ip"], None)
 
-    # 1) subnets with evidence from directed broadcasts
     nets: dict[str, dict] = {}
+    # 1) subnets with evidence from directed broadcasts
     for bcast, srcs in obs.get("bcast_sources", {}).items():
         if bcast == "255.255.255.255":
             continue
@@ -106,20 +144,42 @@ def analyse(obs: dict, own_ip: str, known_subnets: dict[str, list[dict]] | None 
         if p is None:
             continue
         net = ipaddress.IPv4Network(f"{bcast}/{p}", strict=False)
-        e = nets.setdefault(str(net), {"net": net, "evidence": set()})
+        e = nets.setdefault(str(net), {"net": net, "evidence": set(), "conf": "broadcast"})
         e["evidence"].add(f"broadcasts to {bcast}")
+    # 2) the adapter's own network (DHCP lease or static settings)
+    own_net = None
+    if own and own.get("net"):
+        try:
+            own_net = ipaddress.IPv4Network(own["net"], strict=False)
+        except ValueError:
+            own_net = None
+        if own_net and (own_net.network_address.is_link_local or own_net.prefixlen < 8):
+            own_net = None
+    if own_net is not None:
+        e = nets.get(str(own_net))
+        if e is None:
+            nets[str(own_net)] = {"net": own_net, "evidence": {f"mask from your {own.get('source') or 'adapter'}"},
+                                  "conf": "adapter"}
+        else:
+            e["evidence"].add(f"matches your {own.get('source') or 'adapter'}")
 
-    # 2) every host goes into the most specific evidenced subnet, else a /24 guess
+    # 3) every host goes into the most specific evidenced subnet; the rest are clustered
     members: dict[str, list[str]] = defaultdict(list)
+    leftovers = []
     for ip in hosts:
         a = ipaddress.IPv4Address(ip)
         fit = [e["net"] for e in nets.values() if a in e["net"]]
         if fit:
-            net = max(fit, key=lambda n: n.prefixlen)
+            members[str(max(fit, key=lambda n: n.prefixlen))].append(ip)
         else:
-            net = ipaddress.IPv4Network(f"{ip}/24", strict=False)
-            nets.setdefault(str(net), {"net": net, "evidence": set()})
-        members[str(net)].append(ip)
+            leftovers.append(ip)
+    for net, conf in _cluster_24s(leftovers):
+        ev = "devices span neighbouring /24s – smallest network covering them" if conf == "cover" \
+            else "no broadcasts heard – assumed /24"
+        nets.setdefault(str(net), {"net": net, "evidence": {ev}, "conf": conf})
+        for ip in leftovers:
+            if ipaddress.IPv4Address(ip) in net:
+                members[str(net)].append(ip)
 
     out = []
     asks = obs.get("arp_asks", {})
@@ -129,12 +189,14 @@ def analyse(obs: dict, own_ip: str, known_subnets: dict[str, list[dict]] | None 
             continue
         net = e["net"]
         devs = [d for d in bac if ipaddress.IPv4Address(d["ip"]) in net]
-        # likely gateway: an address in this subnet that several devices ARP for
-        gw = None
+        # likely gateway: an address several devices ARP for, else the adapter's own gateway
+        gw, gw_from = None, None
         cands = [(len(set(a)), t) for t, a in asks.items() if _usable(t, own_ip) and ipaddress.IPv4Address(t) in net]
         cands.sort(reverse=True)
         if cands and cands[0][0] >= 2:
-            gw = cands[0][1]
+            gw, gw_from = cands[0][1], "devices ARP for it"
+        elif own and own.get("gateway") and ipcalc.in_subnet(own["gateway"], net):
+            gw, gw_from = own["gateway"], f"from your {own.get('source') or 'adapter'}"
         used = set(ips) | ({gw} if gw else set())
         start, end, clash = suggest_range(net, used)
         host_rows = []
@@ -146,10 +208,11 @@ def analyse(obs: dict, own_ip: str, known_subnets: dict[str, list[dict]] | None 
                                           "vendor": d.get("vendor"), "route": d.get("route")} for d in dv]})
         out.append({
             "subnet": key, "prefix": net.prefixlen,
-            "confidence": "high" if e["evidence"] else "guess",
-            "evidence": sorted(e["evidence"]) or ["no broadcasts heard – assumed /24"],
+            "confidence": e["conf"], "confidence_label": CONFIDENCE_LABEL[e["conf"]],
+            "evidence": sorted(e["evidence"]),
             "hosts": host_rows, "host_count": len(ips), "bacnet_count": len(devs),
-            "gateway_hint": gw, "range_start": start, "range_end": end, "range_clashes": clash,
+            "gateway_hint": gw, "gateway_from": gw_from,
+            "range_start": start, "range_end": end, "range_clashes": clash,
             "saved_as": known_subnets.get(key, []),
             "contains_me": ipaddress.IPv4Address(own_ip) in net if _usable(own_ip, "") else False,
         })
@@ -159,7 +222,7 @@ def analyse(obs: dict, own_ip: str, known_subnets: dict[str, list[dict]] | None 
 
 def run(prober, adapter: str, src_ip: str, seconds: float, send_whois: bool, use_npcap: bool,
         cancel, log, progress, prefix: int | None = None, mac: str | None = None) -> dict:
-    """Collect observations for `seconds`. Returns the raw observation dict."""
+    """Collect observations for `seconds`. Returns the raw observation dict, incl. 'methods' (what ran)."""
     from . import npcap
     if prober.kind == "fake":
         for i in range(int(seconds)):
@@ -167,8 +230,12 @@ def run(prober, adapter: str, src_ip: str, seconds: float, send_whois: bool, use
                 break
             time.sleep(min(0.15, seconds / 40))
             progress(i + 1)
-        return prober.discover_extra()
-    obs: dict = {"hosts": {}, "bacnet": [], "bcast_sources": {}, "arp_asks": {}}
+        obs = prober.discover_extra()
+        obs["methods"] = [f"listened {int(seconds)} s (demo)", "Who-Is (demo)"]
+        return obs
+    obs: dict = {"hosts": {}, "bacnet": [], "bcast_sources": {}, "arp_asks": {}, "methods": []}
+    on_net = bool(prefix) and not src_ip.startswith("169.254.")
+    own_net = ipaddress.IPv4Network(f"{src_ip}/{prefix}", strict=False) if on_net else None
     sniff_result: dict = {}
     t = None
     if use_npcap:
@@ -180,28 +247,61 @@ def run(prober, adapter: str, src_ip: str, seconds: float, send_whois: bool, use
         t = threading.Thread(target=listen, daemon=True)
         t.start()
         time.sleep(1.0)    # let the capture start before we send anything
+        obs["methods"].append(f"listened {int(seconds)} s")
     t0 = time.monotonic()
     if send_whois and not cancel():
+        # Raw Who-Is frame on this adapter (Npcap): Windows routing can't send it out of Wi-Fi / Hyper-V / VPN.
+        if use_npcap and not sniff_result.get("error"):
+            try:
+                npcap.send_raw_whois(adapter, src_ip, mac)
+                obs["methods"].append(f"Who-Is sent raw on {adapter}")
+            except Exception as e:
+                log(f"Raw Who-Is on {adapter} failed ({e}); using a normal broadcast", "warn")
         targets = ["255.255.255.255"]
-        if prefix and not src_ip.startswith("169.254."):
-            # Windows may send 255.255.255.255 out of a different adapter (Wi-Fi, Hyper-V, VPN).
+        if own_net is not None:
             # The adapter's own subnet broadcast is always routed out of this adapter.
-            targets.insert(0, str(ipaddress.IPv4Network(f"{src_ip}/{prefix}", strict=False).broadcast_address))
+            targets.insert(0, str(own_net.broadcast_address))
         obs["whois_to"] = targets
+        obs["methods"].append(f"Who-Is to {' and '.join(targets)}")
         obs["bacnet"].extend(_who_is_any(src_ip, min(seconds, 5.0), cancel, log, targets))
         progress(min(seconds, time.monotonic() - t0))
+    # Quiet networks (e.g. only DXR2s) say very little: ask every address on our own network too.
+    if own_net is not None and own_net.prefixlen >= 22 and not cancel():
+        try:
+            hits = _arp_sweep(prober, npcap, adapter, src_ip, mac, own_net, use_npcap and not sniff_result.get("error"), cancel)
+            obs["hosts"].update(hits)
+            obs["methods"].append(f"ARP sweep {own_net} ({len(hits)} answered)")
+        except Exception as e:
+            log(f"Discover ARP sweep failed: {e}", "warn")
     while t is not None and t.is_alive():
         t.join(0.5)
         progress(min(seconds, time.monotonic() - t0 + 1))
     if sniff_result.get("error"):
         obs["npcap_error"] = sniff_result["error"]
     if sniff_result:
-        obs["hosts"].update(sniff_result.get("hosts", {}))
+        for ip, m in sniff_result.get("hosts", {}).items():
+            obs["hosts"].setdefault(ip, m)
         seen = {d["key"] for d in obs["bacnet"]}
         obs["bacnet"].extend(d for d in sniff_result.get("bacnet", []) if d["key"] not in seen)
         obs["bcast_sources"] = sniff_result.get("bcast_sources", {})
         obs["arp_asks"] = sniff_result.get("arp_asks", {})
     return obs
+
+
+def _arp_sweep(prober, npcap, adapter, src_ip, mac, net, use_npcap, cancel) -> dict[str, str]:
+    if use_npcap:
+        try:
+            return npcap.arp_sweep(adapter, src_ip, str(net), mac=mac)
+        except Exception:
+            pass                    # fall back to Windows ARP below
+    from concurrent.futures import ThreadPoolExecutor
+    hosts = [str(h) for h in net.hosts() if str(h) != src_ip]
+    out: dict[str, str] = {}
+    with ThreadPoolExecutor(64) as pool:
+        for ip, m in zip(hosts, pool.map(lambda ip: None if cancel() else prober.arp(ip, src_ip), hosts)):
+            if m:
+                out[ip] = m
+    return out
 
 
 def _who_is_any(src_ip: str, listen: float, cancel, log, targets=("255.255.255.255",)) -> list[dict]:

@@ -91,9 +91,9 @@ class ScanManager:
     def npcap_ok(self) -> bool:
         return self.prober.kind == "windows" and npcap.status()["available"]
 
-    def start_discover(self, seconds: int = 20, send_whois: bool = True) -> dict:
+    def start_discover(self, seconds: int = 20, send_whois: bool = True, adapter: str | None = None) -> dict:
         seconds = max(5, min(int(seconds), 120))
-        a = self.engine.adapter()
+        a = self.engine.adapter(adapter)      # Discover can run on a different adapter from the one at the top
         p = a.primary
         if not p:
             raise ScanError(f"{a.name} has no IPv4 address. Set it to DHCP (it will pick a 169.254 address "
@@ -110,11 +110,13 @@ class ScanManager:
                           "adapter": a.name, "phase": "listening" if use_npcap else "BACnet Who-Is",
                           "done": 0, "total": seconds, "found": 0,
                           "started": datetime.now().strftime("%H:%M:%S"), "error": None}
-        threading.Thread(target=self._run_discover, args=(a.name, p.ip, p.prefix, seconds, send_whois, use_npcap),
+        own = {"net": f"{p.ip}/{p.prefix}", "source": "DHCP lease" if a.dhcp else "adapter settings",
+               "gateway": a.gateways[0] if a.gateways else None}
+        threading.Thread(target=self._run_discover, args=(a.name, p.ip, p.prefix, seconds, send_whois, use_npcap, own),
                          daemon=True).start()
         return self.status()
 
-    def _run_discover(self, adapter, src_ip, prefix, seconds, send_whois, use_npcap):
+    def _run_discover(self, adapter, src_ip, prefix, seconds, send_whois, use_npcap, own=None):
         how = ("listening" + (" + BACnet Who-Is" if send_whois else "")) if use_npcap else "BACnet Who-Is only (no Npcap)"
         self.log.add(f"Discover on {adapter} ({src_ip}) for {seconds} s: {how}")
         try:
@@ -128,8 +130,9 @@ class ScanManager:
             for n in self._all_networks():
                 known.setdefault(n["subnet"], []).append(
                     {"id": n["id"], "name": n["name"], "path": " › ".join(self.store.path_names(n["id"]))})
-            result = discover.analyse(obs, src_ip, known)
+            result = discover.analyse(obs, src_ip, known, own=own)
             self.discover_result = {"subnets": result, "npcap": use_npcap, "whois": send_whois,
+                                    "methods": obs.get("methods", []),
                                     "npcap_error": obs.get("npcap_error"), "whois_to": obs.get("whois_to", []),
                                     "src_ip": src_ip, "adapter": adapter,
                                     "finished": datetime.now().strftime("%H:%M:%S")}
@@ -169,6 +172,8 @@ class ScanManager:
                 my_mac = self.engine.adapter(adapter).mac or None
             except Exception:
                 my_mac = None
+            # Only one "This PC" row: drop rows for addresses this laptop used before on this subnet.
+            self.store.remove_old_self(subnet, src_ip)
             self.store.upsert_device(subnet, src_ip, src_ip, "self", name=socket.gethostname(), mac=my_mac)
             for step in KINDS[kind]["steps"]:
                 if self._cancel.is_set():
