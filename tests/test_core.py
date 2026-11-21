@@ -392,6 +392,54 @@ class StoreAndJoin(unittest.TestCase):
         with self.assertRaises(DeviceToolError):
             tools.ping_poll(s["session"])
 
+    def test_health_checks(self):
+        sn = self.net["subnet"]                                            # 10.20.5.0/24
+        up = self.store.upsert_device
+        up(sn, "10.20.5.10", "10.20.5.10", "bacnet", mac="00-A0-03-00-00-10", bacnet_instance=2501, model="DXR2", name="A")
+        up(sn, "10.20.5.11", "10.20.5.11", "bacnet", mac="00-A0-03-00-00-11", bacnet_instance=2501, model="DXR2", name="B")  # dup
+        up(sn, "10.20.5.12", "10.20.5.12", "bacnet", mac="00-A0-03-00-00-12", bacnet_instance=4194303, model="DXR2")        # default
+        up(sn, "192.168.0.10", "192.168.0.10", "bacnet", bacnet_instance=1)                                               # wrong subnet
+        up(sn, "10.20.5.20", "10.20.5.20", "arp", mac="AA-AA-AA-AA-AA-01")
+        up(sn, "10.20.5.20", "10.20.5.20", "arp", mac="BB-BB-BB-BB-BB-02")                                                # MAC changed
+        up(sn, "10.20.5.21", "10.20.5.21", "arp", mac="BB-BB-BB-BB-BB-02")                                                # same MAC twice
+        ids = {d["ip"]: d["id"] for d in self.store.devices(sn)}
+        for ip, fw in (("10.20.5.10", "FW=2.2"), ("10.20.5.11", "FW=2.2"), ("10.20.5.12", "FW=2.1")):
+            self.store.set_device_props(ids[ip], fw, None)
+        h = self.store.health(self.net["id"])
+        kinds = sorted(i["kind"] for i in h["issues"])
+        self.assertEqual(kinds, ["default_instance", "dup_instance", "firmware", "mac_changed", "mac_twice", "wrong_subnet"])
+        fw = next(i for i in h["issues"] if i["kind"] == "firmware")
+        self.assertEqual([d["ip"] for d in fw["devices"]], ["10.20.5.12"])
+        dup = next(i for i in h["issues"] if i["kind"] == "dup_instance")
+        self.assertEqual(sorted(d["ip"] for d in dup["devices"]), ["10.20.5.10", "10.20.5.11"])
+        self.assertEqual((h["bacnet"], h["firmware_known"]), (4, 3))
+
+    def test_object_list_and_who_has(self):
+        import time
+        from netjoin.scan.devtools import DeviceTools
+        from netjoin.scan.probes import FakeProber
+        tools = DeviceTools(self.engine, FakeProber())
+        self.engine.join(self.net["id"])
+        sn = self.net["subnet"]
+        self.store.upsert_device(sn, "10.20.5.12", "10.20.5.12", "bacnet", bacnet_instance=2503, name="RA L2-02")
+        did = next(x for x in self.store.devices(sn) if x["ip"] == "10.20.5.12")["id"]
+        job = tools.objects_start(did)
+        for _ in range(100):
+            if tools.job(job["job"])["finished"]:
+                break
+            time.sleep(0.05)
+        got = tools.objects_get(did)
+        objs = {o["name"]: o for o in got["objects"]}
+        sp = objs["L2'RA02'SpTRCmf"]
+        self.assertEqual((sp["short"], sp["value"], sp["units"], sp["priority"], sp["relinquish_default"]),
+                         ("AV", "23.5", "°C", [{"level": 8, "value": "23.5"}], "21"))
+        self.assertTrue(objs["L2'RA02'WndwCnt"]["flags"]["alarm"])
+        self.assertEqual(objs["L2'RA02'OpMod"]["value"], "Comfort")
+        r = tools.objects_refresh(did, [[0, 1]])
+        self.assertEqual([o["name"] for o in r["objects"]], ["L2'RA02'RTmp"])
+        w = tools.who_has("L2'RA02'SpTRCmf")
+        self.assertEqual([(x["device"], x["object"], x["device_id"]) for x in w["results"]], [(2503, "AV 1", did)])
+
     def test_inactive_devices(self):
         from netjoin.scan import ScanManager
         from netjoin.scan.probes import FakeProber

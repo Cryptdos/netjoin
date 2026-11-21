@@ -68,6 +68,8 @@ CREATE TABLE IF NOT EXISTS devices(
     expected INTEGER NOT NULL DEFAULT 0,   -- on an imported device list: should be there
     expected_since TEXT,
     notes TEXT,                    -- the engineer's notes (like a network's)
+    prev_mac TEXT,                 -- the MAC this address answered with before it changed
+    mac_changed TEXT,
     firmware TEXT,                 -- from BACnet device properties, when read
     app_version TEXT,
     props_ts TEXT,
@@ -124,7 +126,7 @@ class Store:
         if "expected" not in cols:     # v0.9.1: imported device lists
             self.db.execute("ALTER TABLE devices ADD COLUMN expected INTEGER NOT NULL DEFAULT 0")
             self.db.execute("ALTER TABLE devices ADD COLUMN expected_since TEXT")
-        for col in ("notes", "firmware", "app_version", "props_ts"):     # v0.10: device pages
+        for col in ("notes", "firmware", "app_version", "props_ts", "prev_mac", "mac_changed"):     # v0.10 / v0.11
             if col not in cols:
                 self.db.execute(f"ALTER TABLE devices ADD COLUMN {col} TEXT")
         ncols = {r["name"] for r in self.db.execute("PRAGMA table_info(nodes)")}
@@ -454,6 +456,8 @@ class Store:
             else:
                 srcs = set(filter(None, (row["sources"] or "").split(","))) | {source}
                 upd = {"last_seen": ts, "sources": ",".join(sorted(srcs))}
+                if fields.get("mac") and row["mac"] and fields["mac"] != row["mac"]:
+                    upd["prev_mac"], upd["mac_changed"] = row["mac"], ts      # another box at this address?
                 if not row["first_seen"]:         # an imported (expected) device turning up for the first time
                     upd["first_seen"] = ts
                 upd.update({k: v for k, v in fields.items() if v is not None})
@@ -680,6 +684,92 @@ class Store:
                 out.append({**r, "network_ids": [n["id"] for n in nets]})
         return out
 
+    # ---------- health checks (v0.11) ----------
+    DEFAULT_INSTANCES = {4194303: "4194303 is the 'not configured' instance"}
+
+    def health(self, node_id: int) -> dict:
+        """Classic commissioning faults among the devices NetJoin knows about. Duplicate instances are
+        checked across the whole site (BACnet instances must be unique on the internetwork)."""
+        anc = self.ancestors(node_id)
+        if not anc:
+            raise StoreError("Not found")
+        site = anc[-1]
+        scope = {n["subnet"] for n in self.networks_under(node_id)}
+        site_rows = self.devices_for_node(site["id"])["devices"]
+        rows = [r for r in site_rows if not r["is_self"]]
+        in_scope = lambda r: r["subnet"] in scope
+        ref = lambda r: {"id": r["id"], "network_id": (r.get("network_ids") or [None])[0], "ip": r["ip"],
+                         "label": r["name"] or (f"#{r['bacnet_instance']}" if r["bacnet_instance"] is not None else r["ip"]),
+                         "instance": r["bacnet_instance"], "network": r.get("network")}
+        issues = []
+        # 1. duplicate BACnet instance numbers
+        by_inst: dict[int, list] = {}
+        for r in rows:
+            if r["bacnet_instance"] is not None:
+                by_inst.setdefault(r["bacnet_instance"], []).append(r)
+        for inst, rs in sorted(by_inst.items()):
+            keys = {(x["subnet"], x["key"]) for x in rs}
+            if len(keys) > 1 and any(in_scope(x) for x in rs):
+                issues.append({"kind": "dup_instance", "severity": "warn", "title": f"Instance {inst} is used by {len(keys)} devices",
+                               "detail": "BACnet device instances must be unique across the site – the BMS will only see one of them.",
+                               "devices": [ref(x) for x in rs]})
+        # 2. factory / unconfigured instance numbers
+        for r in rows:
+            if in_scope(r) and r["bacnet_instance"] in self.DEFAULT_INSTANCES:
+                issues.append({"kind": "default_instance", "severity": "warn", "title": f"{r['ip']} has instance {r['bacnet_instance']}",
+                               "detail": f"{self.DEFAULT_INSTANCES[r['bacnet_instance']]} – the device hasn't been given its own number.",
+                               "devices": [ref(r)]})
+        # 3. a different MAC at the same address
+        for r in rows:
+            if in_scope(r) and r.get("prev_mac") and r.get("mac") and r["prev_mac"] != r["mac"]:
+                issues.append({"kind": "mac_changed", "severity": "warn", "title": f"{r['ip']} answered with a different MAC",
+                               "detail": f"Was {r['prev_mac']}, now {r['mac']} (noticed {r['mac_changed'][:16].replace('T', ' ')}). "
+                                         "Two devices may be sharing this address, or the unit was swapped.",
+                               "devices": [ref(r)]})
+        # 4. one MAC at several addresses on the same subnet
+        by_mac: dict[tuple, list] = {}
+        for r in rows:
+            if r.get("mac") and not r.get("route") and not str(r["mac"]).startswith("Randomised"):
+                by_mac.setdefault((r["subnet"], r["mac"]), []).append(r)
+        for (sn, mac), rs in by_mac.items():
+            if len({x["ip"] for x in rs}) > 1 and sn in scope:
+                issues.append({"kind": "mac_twice", "severity": "info", "title": f"{mac} is at {len(rs)} addresses",
+                               "detail": "The same device answers on more than one IP – a second address on purpose, or a leftover DHCP lease.",
+                               "devices": [ref(x) for x in rs]})
+        # 5. devices answering from outside the subnet they were found on
+        for r in rows:
+            try:
+                outside = ipaddress.ip_address(r["ip"]) not in ipaddress.ip_network(r["subnet"])
+            except ValueError:
+                outside = False
+            if in_scope(r) and outside:
+                issues.append({"kind": "wrong_subnet", "severity": "warn", "title": f"{r['ip']} isn't on {r['subnet']}",
+                               "detail": "It answered on this cable but its address belongs to another subnet – often a factory-default "
+                                         "IP, or wrong IP settings.", "devices": [ref(r)]})
+        # 6. firmware that differs from others of the same model
+        by_model: dict[str, list] = {}
+        for r in rows:
+            if r.get("model") and r.get("firmware"):
+                by_model.setdefault(r["model"], []).append(r)
+        for model, rs in sorted(by_model.items()):
+            counts: dict[str, int] = {}
+            for x in rs:
+                counts[x["firmware"]] = counts.get(x["firmware"], 0) + 1
+            if len(counts) > 1:
+                common = max(counts, key=lambda k: (counts[k], k))
+                tie = sum(1 for v in counts.values() if v == counts[common]) > 1
+                odd = [x for x in rs if (tie or x["firmware"] != common) and in_scope(x)]
+                if odd:
+                    spread = ", ".join(f"{n} on {fw}" for fw, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+                    issues.append({"kind": "firmware", "severity": "info",
+                                   "title": f"{model}: firmware differs ({spread})" if tie else f"{model}: {len(odd)} on different firmware",
+                                   "detail": "Devices of the same model run different firmware." if tie
+                                             else f"Most ({counts[common]}) run {common}; these run something else.",
+                                   "devices": [{**ref(x), "note": x["firmware"]} for x in odd]})
+        bac = [r for r in rows if in_scope(r) and r["bacnet_instance"] is not None]
+        return {"node_id": node_id, "issues": issues, "bacnet": len(bac),
+                "firmware_known": sum(1 for r in bac if r.get("firmware")), "checked": len([r for r in rows if in_scope(r)])}
+
     def networks_under(self, node_id: int) -> list[dict]:
         """Every network at or below a node (a network gives just itself)."""
         node = self.node(node_id)
@@ -842,7 +932,7 @@ class Store:
                      "dns_override", "dns", "notes", "addr_mode", "fixed_ip", "alloc")
     DEVICE_FIELDS = ("key", "ip", "mac", "ping_ms", "bacnet_instance", "bacnet_vendor_id", "vendor", "mac_vendor",
                      "name", "model", "route", "ports", "sources", "first_seen", "last_seen", "expected", "expected_since",
-                     "notes", "firmware", "app_version", "props_ts")
+                     "notes", "firmware", "app_version", "props_ts", "prev_mac", "mac_changed")
 
     def export(self, node_id: int | None = None, include_devices: bool = False) -> dict:
         """Format 2. node_id = one site (plan item 1); None = everything."""

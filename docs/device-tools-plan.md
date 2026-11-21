@@ -1,6 +1,6 @@
 # NetJoin – devices in the tree and per-device engineering tools (plan)
 
-Status: **agreed direction, revised with LB's decisions (section 6)**. Nothing here is built yet.
+Status: **agreed direction, revised with LB's decisions (section 6)**. Phase A built in v0.10, phase B in v0.11; phase C not started.
 
 **Ethos: NetJoin reads, observes and connects. It doesn't change devices, and it isn't a commissioning-status or note-taking tool.** Writing to devices stays with the official vendor tools.
 

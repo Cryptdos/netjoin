@@ -576,3 +576,44 @@ table.props th{width:220px;color:var(--muted);font-weight:600}
 @media (min-width: 1181px) and (min-height: 520px){ .device-view{flex:1 1 auto;min-height:0;overflow-y:auto} }
 .tab-panel p{margin:0}
 #bacProps{display:flex;flex-direction:column;gap:10px}
+
+/* v0.11 object list */
+.obj-box{display:flex;flex-direction:column;gap:10px;min-height:0}
+.obj-tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.obj-search{flex:1 1 220px;max-width:320px}
+.chip.flagged .n{color:var(--warn)}
+table.objs td.oname{white-space:nowrap}
+table.objs td.oval{font-family:var(--mono);white-space:nowrap}
+table.objs td.oval .unit{color:var(--muted);font-size:12px}
+table.objs tr.oos td{color:var(--muted)}
+table.objs tr.alarm td.oval{color:var(--err)}
+.obadge{display:inline-block;margin:1px 4px 1px 0;font-size:11px;font-weight:600;padding:1px 6px;border-radius:999px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.obadge.alarm,.obadge.fault{color:var(--err);border-color:var(--err-line);background:var(--err-bg)}
+.obadge.ovr{color:var(--warn);border-color:var(--warn-line);background:var(--warn-bg)}
+.obadge.oos{color:var(--muted);background:var(--bg)}
+.prio{font-size:12px;color:var(--muted)}
+.prio.manual{color:var(--warn);font-weight:600}
+.obj-wrap{max-height:none}
+@media (min-width: 1181px) and (min-height: 520px){ body.at-device .tab-panel{flex:1 1 auto;min-height:0} .obj-box{flex:1 1 auto} .obj-wrap{flex:1 1 auto;min-height:160px;overflow:auto} }
+/* v0.11 checks + find point */
+.btn.warn-btn{color:var(--warn);border-color:var(--warn-line);background:var(--warn-bg)}
+.wide-dlg{width:min(760px,94vw);display:flex;flex-direction:column;gap:12px}
+.health-body{display:flex;flex-direction:column;gap:12px;max-height:60vh;overflow-y:auto}
+.hissue{border:1px solid var(--line);border-left:4px solid var(--faint);border-radius:6px;padding:10px 12px;display:flex;flex-direction:column;gap:4px}
+.hissue.warn{border-left-color:var(--warn)}
+.hissue.info{border-left-color:var(--accent)}
+.hissue .htitle{font-weight:600;display:flex;gap:8px;align-items:baseline}
+.hissue .sev{color:var(--warn)}
+.hissue.info .sev{color:var(--accent-d)}
+.hissue p{margin:0}
+.hdevs{margin:4px 0 0;padding-left:18px;font-size:13px}
+.hdevs li{margin:2px 0}
+#whoHasResults table.props{max-width:none}
+.tabs{overflow-x:auto;scrollbar-width:thin}
+.tab{flex:none}
+@media (max-width: 640px){ .tab{padding:8px 10px} .vendor-list{max-width:calc(100vw - 32px)} }
+#objFoot{display:flex;flex-wrap:wrap;gap:4px 14px}
+#objFoot span+span::before{content:"· ";color:var(--faint)}
+.tabs{flex:none}
+#healthDlg,#whoHasDlg{width:min(780px,94vw)}
+#healthDlg .wide-dlg,#whoHasDlg .wide-dlg{width:auto;padding:20px 22px}

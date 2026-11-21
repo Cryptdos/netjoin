@@ -291,6 +291,38 @@ def device_search(req, data):
     return eng().store.search_devices(req.query_params.get("q", ""))
 
 
+def device_objects_start(req, data):
+    return DEVTOOLS.objects_start(int(req.path_params["id"]))
+
+
+def device_objects(req, data):
+    return DEVTOOLS.objects_get(int(req.path_params["id"])) or {"objects": None}
+
+
+def device_objects_refresh(req, data):
+    return DEVTOOLS.objects_refresh(int(req.path_params["id"]), data.get("which"))
+
+
+def job_status(req, data):
+    return DEVTOOLS.job(int(req.path_params["jid"]))
+
+
+def job_cancel(req, data):
+    return DEVTOOLS.objects_cancel(int(req.path_params["jid"]))
+
+
+def health(req, data):
+    return eng().store.health(int(req.query_params.get("node_id", 0)))
+
+
+def health_firmware(req, data):
+    return DEVTOOLS.firmware_start(int(req.query_params.get("node_id", 0)))
+
+
+def who_has(req, data):
+    return DEVTOOLS.who_has(str(data.get("name") or ""))
+
+
 def ping_start(req, data):
     return DEVTOOLS.ping_start(int(data.get("device_id", 0)))
 
@@ -421,6 +453,14 @@ def build_app(engine: Engine, port: int, scans: ScanManager) -> Starlette:
         Route("/api/device/{id:int}/notes", api(device_notes), methods=["PUT"]),
         Route("/api/device/{id:int}/bacnet", api(device_props), methods=["POST"]),
         Route("/api/device/{id:int}/ports", api(device_ports), methods=["POST"]),
+        Route("/api/device/{id:int}/objects", api(device_objects)),
+        Route("/api/device/{id:int}/objects", api(device_objects_start), methods=["POST"]),
+        Route("/api/device/{id:int}/objects/refresh", api(device_objects_refresh), methods=["POST"]),
+        Route("/api/jobs/{jid:int}", api(job_status)),
+        Route("/api/jobs/{jid:int}/cancel", api(job_cancel), methods=["POST"]),
+        Route("/api/health", api(health)),
+        Route("/api/health/firmware", api(health_firmware), methods=["POST"]),
+        Route("/api/who-has", api(who_has), methods=["POST"]),
         Route("/api/ping", api(ping_start), methods=["POST"]),
         Route("/api/ping/{sid:int}", api(ping_poll)),
         Route("/api/ping/{sid:int}/stop", api(ping_stop), methods=["POST"]),

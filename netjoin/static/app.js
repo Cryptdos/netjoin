@@ -443,7 +443,7 @@ async function renderDevicePage() {
 function renderDeviceTabs() {
   const r = state.device; if (!r) return;
   const d = r.device;
-  const tabs = [["overview", "Overview"], ["ping", "Ping"], ...(d.bacnet_instance != null ? [["bacnet", "BACnet"]] : []), ["ports", "Ports"]];
+  const tabs = [["overview", "Overview"], ["ping", "Ping"], ...(d.bacnet_instance != null ? [["bacnet", "BACnet"], ["objects", "Objects"]] : []), ["ports", "Ports"]];
   if (!tabs.some(([k]) => k === state.devTab)) state.devTab = "overview";
   const bar = el("div", { class: "tabs", role: "tablist", "aria-label": "Device" }, tabs.map(([k, label]) =>
     el("button", { type: "button", role: "tab", class: "tab", id: `tab-${k}`, "aria-selected": String(state.devTab === k), "aria-controls": "devPanel",
@@ -451,7 +451,7 @@ function renderDeviceTabs() {
       k === "ping" && state.ping && state.ping.running ? el("span", { class: "live-dot", title: "Pinging" }) : null)));
   const panel = el("div", { class: "tab-panel", id: "devPanel", role: "tabpanel", "aria-labelledby": `tab-${state.devTab}` });
   $("#deviceView").replaceChildren(bar, panel);
-  ({ overview: renderOverviewTab, ping: renderPingTab, bacnet: renderBacnetTab, ports: renderPortsTab })[state.devTab](panel, r);
+  ({ overview: renderOverviewTab, ping: renderPingTab, bacnet: renderBacnetTab, objects: renderObjectsTab, ports: renderPortsTab })[state.devTab](panel, r);
 }
 
 function renderOverviewTab(panel, r) {
@@ -621,6 +621,161 @@ function showDeviceProps(p) {
 }
 function fmtDur(s) { const m = Math.floor(s / 60), r = s % 60; return m ? `${m} min${r ? ` ${r} s` : ""}` : `${r} s`; }
 
+// ---- object list (v0.11): every object with value, units, flags, priority – filter, refresh, CSV. Read-only.
+state.objects = {};           // device id → { read_at, objects, partial, seconds }
+state.objJob = null;
+state.objView = { q: "", types: new Set(), flag: "all", sort: { key: "obj", dir: 1 }, auto: false };
+const OBJ_FLAGS = [["all", "All"], ["commanded", "Commanded"], ["overridden", "Overridden"], ["oos", "Out of service"], ["alarm", "In alarm"], ["fault", "Fault"]];
+const objFlag = (o, f) => f === "all" || (f === "commanded" ? o.commanded : f === "fault" ? (o.flags.fault || !!o.reliability) : o.flags[f]);
+function renderObjectsTab(panel, r) {
+  const d = r.device; const cached = state.objects[d.id];
+  panel.append(el("div", { id: "objBox", class: "obj-box" }));
+  if (!r.on_subnet) {
+    $("#objBox").replaceChildren(el("p", { class: "muted" }, `The laptop isn't on ${d.subnet}. `,
+      r.network ? el("button", { type: "button", class: "netlink", onclick: () => goTo(r.network.id) }, `Join ${r.network.name}`) : null, " to read this device's objects."));
+    return;
+  }
+  if (cached) return drawObjects();
+  if (state.objJob && state.objJob.device_id === d.id && !state.objJob.finished) return drawObjJob();
+  // Maybe the server already has a list from earlier this session
+  api(`/device/${d.id}/objects`).then((res) => {
+    if (res && res.objects) { state.objects[d.id] = res; if (state.devTab === "objects" && state.device && state.device.device.id === d.id) drawObjects(); }
+    else drawObjStart();
+  }).catch(drawObjStart);
+}
+function drawObjStart() {
+  const box = $("#objBox"); if (!box) return;
+  box.replaceChildren(el("p", {}, "Reads every object in this controller – name, present value, units, status flags and priority array. Nothing is written."),
+    el("p", { class: "small muted" }, "A room controller takes a second or two; a big automation station can take a minute."),
+    el("div", {}, el("button", { type: "button", class: "btn btn-primary", onclick: startObjects }, "Read object list")));
+}
+async function startObjects() {
+  const d = state.device.device;
+  try { state.objJob = await api(`/device/${d.id}/objects`, { method: "POST" }); } catch (e) { flash(e.message, "error"); return; }
+  drawObjJob(); pollObjJob();
+}
+async function pollObjJob() {
+  const j = state.objJob; if (!j || j.finished) return;
+  try { Object.assign(j, await api(`/jobs/${j.job}`)); } catch (e) { j.finished = true; j.error = e.message; }
+  if (j.finished) {
+    if (!j.error) { const res = await api(`/device/${j.device_id}/objects`); if (res.objects) state.objects[j.device_id] = res; }
+    else flash(j.error, "error");
+    if (state.device && state.device.device.id === j.device_id && state.devTab === "objects") { j.error ? drawObjStart() : drawObjects(); }
+    state.objJob = null; refreshLog(); return;
+  }
+  if (state.device && state.device.device.id === j.device_id && state.devTab === "objects") drawObjJob();
+  setTimeout(pollObjJob, 400);
+}
+function drawObjJob() {
+  const box = $("#objBox"); const j = state.objJob; if (!box || !j) return;
+  const pct = j.total ? Math.round((j.done / j.total) * 100) : 0;
+  box.replaceChildren(el("div", { class: "progress" },
+    el("div", { class: "row" }, el("span", { class: "small" }, j.phase === "object list" ? `Reading the object list… ${j.total ? `${j.done} / ${j.total}` : ""}`
+      : `Reading objects… ${j.done} / ${j.total}`), el("div", { class: "spacer" }),
+      el("button", { type: "button", class: "btn small", onclick: () => api(`/jobs/${j.job}/cancel`, { method: "POST" }) }, "Cancel")),
+    el("div", { class: "bar" }, el("div", { style: `width:${pct}%` }))));
+}
+function visibleObjects(list) {
+  const v = state.objView; const q = v.q.trim().toLowerCase();
+  const rows = list.filter((o) => (!v.types.size || v.types.has(o.short)) && objFlag(o, v.flag) && (!q ||
+    [o.name, o.description, `${o.short} ${o.inst}`, `${o.short}${o.inst}`, o.type_name, o.value].some((t) => t && String(t).toLowerCase().includes(q))));
+  const k = v.sort.key, dir = v.sort.dir;
+  const key = (o) => k === "name" ? [o.name.toLowerCase()] : k === "value" ? [isNaN(parseFloat(o.value)) ? 1 : 0, parseFloat(o.value) || 0, o.value] : [o.type, o.inst];
+  return rows.sort((a, b) => { const x = key(a), y = key(b); for (let i = 0; i < x.length; i++) { if (x[i] < y[i]) return -dir; if (x[i] > y[i]) return dir; } return 0; });
+}
+function drawObjects() {
+  const box = $("#objBox"); const d = state.device && state.device.device; if (!box || !d) return;
+  const res = state.objects[d.id]; const all = res.objects; const v = state.objView;
+  const types = {}; for (const o of all) types[o.short] = (types[o.short] || 0) + 1;
+  for (const t of [...v.types]) if (!types[t]) v.types.delete(t);
+  const search = el("input", { type: "search", placeholder: "Search name, description, AV 3…", "aria-label": "Search objects", value: v.q, class: "obj-search" });
+  search.addEventListener("input", () => { v.q = search.value; drawObjTable(); });
+  const typeMenu = el("details", { class: "menu vendor-menu" + (v.types.size ? " active" : ""), id: "objTypes" },
+    el("summary", { class: "btn small" }, v.types.size ? [...v.types].join(", ") : "All types", " ▾"),
+    el("div", { class: "menu-list vendor-list" }, el("div", { class: "row vendor-acts" },
+      el("button", { type: "button", class: "linkish", onclick: () => { v.types.clear(); drawObjects(); } }, "All types")),
+      ...Object.keys(types).sort((a, b) => all.find((o) => o.short === a).type - all.find((o) => o.short === b).type).map((t) =>
+        el("label", { class: "check vend" }, el("input", { type: "checkbox", checked: v.types.has(t),
+          onchange: (e) => { e.target.checked ? v.types.add(t) : v.types.delete(t); drawObjects(); } }),
+          el("span", { class: "vn" }, `${t} – ${all.find((o) => o.short === t).type_name}`), el("span", { class: "n" }, String(types[t]))))));
+  const chips = el("div", { class: "chips" }, OBJ_FLAGS.map(([k, label]) => {
+    const n = k === "all" ? all.length : all.filter((o) => objFlag(o, k)).length;
+    if (k !== "all" && !n && v.flag !== k) return null;
+    return el("button", { type: "button", class: "chip" + (v.flag === k ? " on" : "") + (k !== "all" && n ? " flagged" : ""), "aria-pressed": String(v.flag === k),
+      onclick: () => { v.flag = k; drawObjects(); } }, label, k === "all" ? "" : el("span", { class: "n" }, String(n)));
+  }));
+  const auto = el("label", { class: "check small" }, el("input", { type: "checkbox", checked: v.auto, onchange: (e) => { v.auto = e.target.checked; if (v.auto) autoRefreshObjects(); } }), " Auto-refresh (10 s)");
+  box.replaceChildren(
+    el("div", { class: "obj-tools" }, search, typeMenu, chips, el("div", { class: "spacer" }), auto,
+      el("button", { type: "button", class: "btn small", title: "Re-read present values and flags of the objects shown", onclick: (e) => refreshObjects(e.currentTarget) }, "Refresh values"),
+      el("button", { type: "button", class: "btn small", onclick: exportObjects }, "Export CSV"),
+      el("button", { type: "button", class: "btn small", title: "Read the whole object list again", onclick: () => { delete state.objects[d.id]; startObjects(); } }, "Read again")),
+    el("div", { class: "table-wrap obj-wrap", id: "objTable" }),
+    el("div", { class: "row small muted", id: "objFoot" }));
+  drawObjTable();
+}
+function drawObjTable() {
+  const d = state.device && state.device.device; const res = d && state.objects[d.id]; const box = $("#objTable"); if (!box || !res) return;
+  const rows = visibleObjects(res.objects); const v = state.objView;
+  const th = (label, key) => el("th", { "aria-sort": key && v.sort.key === key ? (v.sort.dir > 0 ? "ascending" : "descending") : null },
+    key ? el("button", { type: "button", onclick: () => { v.sort = v.sort.key === key ? { key, dir: -v.sort.dir } : { key, dir: 1 }; drawObjTable(); } }, label) : label);
+  const badge = (cls, text, title) => el("span", { class: "obadge " + cls, title }, text);
+  const tr = (o) => {
+    const top = o.priority[0];
+    return el("tr", { class: (o.flags.oos ? "oos " : "") + (o.flags.alarm || o.flags.fault || o.reliability ? "alarm" : "") },
+      el("td", { class: "mono", "data-label": "Object", title: o.type_name }, `${o.short} ${o.inst}`),
+      el("td", { class: "mono oname", "data-label": "Name" }, o.name || (o.error ? `(${o.error})` : "")),
+      el("td", { class: "small", "data-label": "Description" }, o.description),
+      el("td", { class: "oval", "data-label": "Value" }, o.value, o.units ? el("span", { class: "unit" }, ` ${o.units}`) : null),
+      el("td", { "data-label": "Flags" },
+        o.flags.alarm ? badge("alarm", "Alarm", o.event_state ? `Event state: ${o.event_state}` : null) : null,
+        o.flags.fault || o.reliability ? badge("fault", "Fault", o.reliability ? `Reliability: ${o.reliability}` : null) : null,
+        o.flags.overridden ? badge("ovr", "Overridden", "Overridden locally (e.g. a hand switch)") : null,
+        o.flags.oos ? badge("oos", "Out of service", null) : null),
+      el("td", { class: "small", "data-label": "Priority", title: o.priority.length ? o.priority.map((p) => `${p.level}: ${p.value}`).join("\n") + (o.relinquish_default != null ? `\nRelinquish default: ${o.relinquish_default}` : "") : (o.relinquish_default != null ? `Relinquish default: ${o.relinquish_default}` : null) },
+        top ? [el("span", { class: "mono prio" + (top.level <= 8 ? " manual" : "") }, `@${top.level}`), ` ${top.value}`, o.priority.length > 1 ? el("span", { class: "sub2" }, `+${o.priority.length - 1} more`) : null] : ""));
+  };
+  box.replaceChildren(rows.length ? el("table", { class: "dev objs" }, el("thead", {}, el("tr", {},
+    th("Object", "obj"), th("Name", "name"), th("Description"), th("Value", "value"), th("Flags"), th("Priority"))), el("tbody", {}, rows.map(tr)))
+    : el("div", { class: "empty" }, "No objects match the search / filters."));
+  $("#objFoot").replaceChildren(el("span", {}, rows.length !== res.objects.length ? `Showing ${rows.length} of ${res.objects.length} objects` : `${res.objects.length} objects`),
+    el("span", {}, `read ${when(res.read_at)}${res.seconds != null ? ` in ${res.seconds} s` : ""}${res.refreshed_at ? ` · values ${when(res.refreshed_at)}` : ""}${res.partial ? " · cancelled part-way" : ""}`));
+}
+async function refreshObjects(btn) {
+  const d = state.device && state.device.device; const res = d && state.objects[d.id]; if (!res) return;
+  const which = visibleObjects(res.objects).slice(0, 400).map((o) => [o.type, o.inst]);
+  const go = async () => {
+    const r = await api(`/device/${d.id}/objects/refresh`, { method: "POST", body: { which } });
+    const by = Object.fromEntries(r.objects.map((o) => [`${o.type}:${o.inst}`, o]));
+    res.objects = res.objects.map((o) => by[`${o.type}:${o.inst}`] || o); res.refreshed_at = r.refreshed_at;
+    if (state.devTab === "objects" && state.device && state.device.device.id === d.id) drawObjTable();
+  };
+  try { btn ? await withBusy(btn, go) : await go(); } catch (e) { state.objView.auto = false; flash(e.message, "error"); }
+}
+// Auto-refresh only while the Objects tab of this device is open and the window is visible
+function autoRefreshObjects() {
+  clearTimeout(state.objAutoTimer);
+  const v = state.objView; if (!v.auto) return;
+  state.objAutoTimer = setTimeout(async () => {
+    const on = state.devTab === "objects" && isDevSel() && state.device && state.objects[state.device.device.id];
+    if (!on) { v.auto = false; return; }
+    if (document.visibilityState === "visible") await refreshObjects(null);
+    autoRefreshObjects();
+  }, 10000);
+}
+function exportObjects() {
+  const d = state.device.device; const rows = visibleObjects(state.objects[d.id].objects);
+  const esc = (v) => { const t = v == null ? "" : String(v); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
+  const head = ["Device", "Instance", "Object type", "Object", "Name", "Description", "Value", "Units", "In alarm", "Fault", "Overridden", "Out of service", "Reliability", "Priority array", "Relinquish default"];
+  const lines = [head.join(",")].concat(rows.map((o) => [devLabel(d), d.bacnet_instance, o.type_name, `${o.short} ${o.inst}`, o.name, o.description, o.value, o.units,
+    o.flags.alarm ? "yes" : "", o.flags.fault ? "yes" : "", o.flags.overridden ? "yes" : "", o.flags.oos ? "yes" : "", o.reliability || "",
+    o.priority.map((p) => `${p.level}:${p.value}`).join(" "), o.relinquish_default ?? ""].map(esc).join(",")));
+  const blob = new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = el("a", { href: URL.createObjectURL(blob), download: `NetJoin-objects-${devLabel(d).replace(/[^\w.-]+/g, "_")}-${new Date().toISOString().slice(0, 10)}.csv` });
+  document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+  flash(`Exported ${rows.length} object(s) to CSV`);
+}
+
 // ---- ports
 function renderPortsTab(panel, r) {
   const d = r.device; const ports = devPorts(d);
@@ -671,6 +826,7 @@ if (window.ResizeObserver) new ResizeObserver(() => fitCrumbs()).observe($("#tbC
 async function refreshDetail() {
   const box = $("#detail");
   if (!isDevSel() || (state.ping && state.ping.deviceId !== devSel().id)) stopPing();
+  if (!isDevSel() || (state.device && state.device.device.id !== devSel().id)) { state.objView.auto = false; clearTimeout(state.objAutoTimer); }
   if (isDevSel()) {
     document.body.classList.remove("at-home"); document.body.classList.add("at-device");
     state.detail = null;
@@ -942,7 +1098,7 @@ function joinFromHome(id, btn) { return joinNetwork(id, null, btn); }
 
 function openMissing(id) {
   state.filter = "missing";
-  for (const o of document.querySelectorAll(".chip")) { const on = o.dataset.filter === "missing"; o.classList.toggle("on", on); o.setAttribute("aria-pressed", String(on)); }
+  for (const o of document.querySelectorAll(".dev-tools .chip")) { const on = o.dataset.filter === "missing"; o.classList.toggle("on", on); o.setAttribute("aria-pressed", String(on)); }
   goTo(id);
 }
 
@@ -1025,6 +1181,66 @@ async function doJoin(btn, ip) {
 }
 
 // ---------- scanning ----------
+// ---------- Checks (v0.11): duplicate instances, MAC changes, wrong subnets, odd firmware ----------
+async function updateHealthBtn() {
+  const d = state.detail; const btn = $("#healthBtn"); const wh = $("#whoHasBtn");
+  btn.hidden = !d; wh.hidden = !d || d.kind !== "network";
+  if (!d) return;
+  try {
+    const h = state.health = await api(`/health?node_id=${d.id}`);
+    if (!state.detail || state.detail.id !== d.id) return;
+    const warn = h.issues.filter((i) => i.severity === "warn").length;
+    btn.textContent = h.issues.length ? `Checks (${h.issues.length})` : "Checks";
+    btn.classList.toggle("warn-btn", warn > 0);
+  } catch (e) {}
+}
+$("#healthBtn").addEventListener("click", async () => { await updateHealthBtn(); drawHealth(); $("#healthDlg").showModal(); });
+$("#healthClose").addEventListener("click", () => $("#healthDlg").close());
+function drawHealth() {
+  const h = state.health; const d = state.detail; if (!h || !d) return;
+  $("#healthTitle").textContent = `Checks – ${d.name}`;
+  const fwBtn = el("button", { type: "button", class: "btn small", onclick: (e) => readFirmware(e.currentTarget) }, "Read firmware now");
+  $("#healthSummary").replaceChildren(`${h.checked} device(s) checked · ${h.bacnet} BACnet · firmware known for ${h.firmware_known} of ${h.bacnet}. `,
+    h.bacnet > h.firmware_known ? fwBtn : "", el("div", { id: "fwProgress" }));
+  const sev = { warn: "⚠", info: "ℹ" };
+  $("#healthBody").replaceChildren(...(h.issues.length ? h.issues.map((i) => el("div", { class: "hissue " + i.severity },
+    el("div", { class: "htitle" }, el("span", { class: "sev", "aria-hidden": "true" }, sev[i.severity]), i.title),
+    el("p", { class: "small muted" }, i.detail),
+    el("ul", { class: "hdevs" }, i.devices.map((x) => el("li", {},
+      x.network_id ? el("button", { type: "button", class: "netlink", onclick: () => { $("#healthDlg").close(); openDevice(x.id, x.network_id); } }, x.label) : x.label,
+      el("span", { class: "small muted" }, ` ${x.ip}${x.instance != null ? ` · #${x.instance}` : ""}${x.network ? ` · ${x.network}` : ""}${x.note ? ` · ${x.note}` : ""}`))))))
+    : [el("p", { class: "ok" }, "Nothing found. "), el("p", { class: "small muted" }, "Checks: duplicate BACnet instances across the site, the 'not configured' instance 4194303, an address answering with a different MAC, one MAC at several addresses, devices answering from outside the subnet, and firmware that differs from others of the same model (read firmware first).")]));
+}
+async function readFirmware(btn) {
+  const d = state.detail; if (!d) return;
+  let j; try { j = await api(`/health/firmware?node_id=${d.id}`, { method: "POST" }); } catch (e) { flash(e.message, "error"); return; }
+  btn.disabled = true;
+  while (!j.finished) {
+    const p = $("#fwProgress");
+    if (p) p.replaceChildren(el("div", { class: "progress" }, el("span", { class: "small" }, `Reading firmware ${j.done} / ${j.total}…`),
+      el("div", { class: "bar" }, el("div", { style: `width:${j.total ? Math.round(j.done / j.total * 100) : 0}%` }))));
+    await new Promise((r) => setTimeout(r, 400));
+    try { j = await api(`/jobs/${j.job}`); } catch (e) { break; }
+  }
+  if (j.summary) flash(j.summary); if (j.error) flash(j.error, "error");
+  await updateHealthBtn(); drawHealth(); refreshLog();
+}
+$("#whoHasBtn").addEventListener("click", () => { $("#whoHasResults").replaceChildren(); $("#whoHasDlg").showModal(); $("#whoHasName").focus(); });
+$("#whoHasClose").addEventListener("click", () => $("#whoHasDlg").close());
+$("#whoHasForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const name = $("#whoHasName").value.trim(); if (!name) return;
+  const out = $("#whoHasResults"); out.replaceChildren(el("p", { class: "muted" }, "Asking…"));
+  await withBusy($("#whoHasGo"), async () => {
+    const r = await api("/who-has", { method: "POST", body: { name } });
+    out.replaceChildren(r.results.length ? el("table", { class: "props" }, el("tbody", {}, r.results.map((x) => el("tr", {},
+      el("td", {}, x.device_id ? el("button", { type: "button", class: "netlink", onclick: () => { $("#whoHasDlg").close(); openDevice(x.device_id, x.network_id || state.detail.id); } },
+        x.device_name || `Device ${x.device}`) : `Device ${x.device}`, el("span", { class: "small muted" }, ` #${x.device} · ${x.ip}${x.route ? ` (${x.route})` : ""}`)),
+      el("td", { class: "mono" }, x.object), el("td", { class: "mono" }, x.name))))) :
+      el("p", { class: "muted" }, `No controller on ${r.subnet} has an object called “${r.name}”. Check the exact name (case matters).`));
+  });
+});
+
 function renderScanMenu() {
   const d = state.detail; const box = $("#scanOptions"); const menu = $("#scanMenu");
   menu.hidden = !d;
@@ -1111,7 +1327,7 @@ async function refreshDevices() {
   $("#lastScan").textContent = r.last_scan ? `Last: ${r.last_scan.kind}, ${when(r.last_scan.ts)}` : "";
   fillDeviceFilters(r);
   if (d.kind !== "network") { renderScanMenu(); renderRollStats(r); renderContents(); }
-  renderDevices();
+  renderDevices(); updateHealthBtn();
 }
 
 // Site / area header: "3 networks · 42 devices · 18 BACnet · last scan 09:02"
@@ -1204,7 +1420,7 @@ function renderDevices() {
   const rollup = d && d.kind !== "network";
   const rows = visibleDevices();
   // chip counts
-  for (const c of document.querySelectorAll(".chip")) {
+  for (const c of document.querySelectorAll(".dev-tools .chip")) {
     const k = c.dataset.filter; const n = all.filter((x) => !x.is_self && DEV_FILTERS[k](x)).length;
     c.replaceChildren(c.dataset.label || (c.dataset.label = c.textContent), k === "all" || !n ? "" : el("span", { class: "n" }, String(n)));
     if (k === "missing" || k === "new" || k === "listed") c.hidden = n === 0 && state.filter !== k;
@@ -1271,9 +1487,9 @@ function setSort(key) {
   $("#devSort").value = key; renderDevices();
 }
 
-for (const c of document.querySelectorAll(".chip")) c.addEventListener("click", () => {
+for (const c of document.querySelectorAll(".dev-tools .chip")) c.addEventListener("click", () => {
   state.filter = c.dataset.filter;
-  for (const o of document.querySelectorAll(".chip")) { o.classList.toggle("on", o === c); o.setAttribute("aria-pressed", String(o === c)); }
+  for (const o of document.querySelectorAll(".dev-tools .chip")) { o.classList.toggle("on", o === c); o.setAttribute("aria-pressed", String(o === c)); }
   renderDevices();
 });
 $("#devSearch").addEventListener("input", renderDevices);
@@ -1324,7 +1540,7 @@ $("#devCsvFile").addEventListener("change", async (e) => {
     const skip = r.skipped.length ? ` · ${r.skipped.length} skipped (${[...new Set(r.skipped.map((x) => x.why))].join(", ")}; first: line ${r.skipped[0].line}${r.skipped[0].ip ? " " + r.skipped[0].ip : ""})` : "";
     flash(`Imported ${file.name}: ${r.added} added, ${r.updated} already known${skip}. Scan to check which are online.`, r.skipped.length ? "warn" : "info");
     state.filter = "listed";
-    for (const o of document.querySelectorAll(".chip")) { o.classList.toggle("on", o.dataset.filter === "listed"); o.setAttribute("aria-pressed", String(o.dataset.filter === "listed")); }
+    for (const o of document.querySelectorAll(".dev-tools .chip")) { o.classList.toggle("on", o.dataset.filter === "listed"); o.setAttribute("aria-pressed", String(o.dataset.filter === "listed")); }
     await refreshDevices(); refreshLog();
   } catch (err) { flash(err.message, "error"); }
 });

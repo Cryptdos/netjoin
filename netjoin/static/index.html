@@ -87,6 +87,8 @@
           <h2 id="devTitle">Devices on this network</h2>
           <span class="small muted" id="lastScan"></span>
           <div class="spacer"></div>
+          <button type="button" class="btn" id="healthBtn" hidden title="Look for duplicate instances, MAC changes, wrong subnets and odd firmware">Checks</button>
+          <button type="button" class="btn" id="whoHasBtn" hidden title="Ask the controllers on this subnet which one holds a point (BACnet Who-Has)">Find point</button>
           <details class="menu" id="scanMenu">
             <summary class="btn" id="scanMenuBtn">Scan ▾</summary>
             <div class="menu-list" id="scanOptions" role="menu"></div>
@@ -280,6 +282,26 @@
       <button type="button" class="btn btn-primary" data-choice="replace" title="Delete the existing site and everything in it, then import">Replace</button>
     </div>
   </div>
+</dialog>
+
+<dialog id="healthDlg" aria-labelledby="healthTitle">
+  <div class="dlg wide-dlg">
+    <div class="row"><h2 id="healthTitle">Checks</h2><div class="spacer"></div>
+      <button type="button" class="btn icon" id="healthClose" aria-label="Close">✕</button></div>
+    <div id="healthSummary" class="small muted"></div>
+    <div id="healthBody" class="health-body"></div>
+  </div>
+</dialog>
+
+<dialog id="whoHasDlg" aria-labelledby="whoHasTitle">
+  <form class="dlg wide-dlg" id="whoHasForm">
+    <div class="row"><h2 id="whoHasTitle">Find a point</h2><div class="spacer"></div>
+      <button type="button" class="btn icon" id="whoHasClose" aria-label="Close">✕</button></div>
+    <p class="small muted">Asks every controller on the laptop's subnet – including MS/TP devices behind routers – which one holds an object with this exact name (BACnet Who-Has). Names are case-sensitive.</p>
+    <div class="row"><input name="name" id="whoHasName" class="mono" placeholder="e.g. L2'RA02'SpTRCmf" autocomplete="off" spellcheck="false" style="flex:1 1 auto">
+      <button type="submit" class="btn btn-primary" id="whoHasGo">Find</button></div>
+    <div id="whoHasResults"></div>
+  </form>
 </dialog>
 
 <dialog id="applyDlg">

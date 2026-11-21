@@ -50,6 +50,41 @@ class Prober:
         with bc.Client(src_ip) as c:
             return bc.read_device_properties(c, target, instance)
 
+    def bacnet_objects(self, src_ip: str, target, instance: int, cancel, progress) -> dict:
+        from . import bacnet_client as bc
+        with bc.Client(src_ip) as c:
+            objs = bc.read_object_list(c, target, instance, cancel=cancel, progress=progress)
+            return bc.read_objects(c, target, objs, cancel=cancel, progress=progress)
+
+    def bacnet_values(self, src_ip: str, target, objects: list[tuple[int, int]]) -> dict:
+        from . import bacnet_client as bc
+        P = bc.P
+        with bc.Client(src_ip) as c:
+            out = {o: {} for o in objects}
+            for k in range(0, len(objects), 16):
+                chunk = objects[k:k + 16]
+                specs = [(t, i, [P["present-value"], P["status-flags"], P["out-of-service"], P["event-state"], P["reliability"]]
+                          + ([P["priority-array"]] if t in bc.COMMANDABLE else [])
+                          + ([P["state-text"]] if t in bc.MULTISTATE else [])
+                          + ([P["active-text"], P["inactive-text"]] if t in bc.BINARY else [])) for t, i in chunk]
+                try:
+                    got = c.rpm(target, specs)
+                except bc.BacnetError as e:
+                    if e.kind == "timeout":
+                        raise
+                    items = [(t, i, p, None) for t, i, ps in specs for p in ps]
+                    vals = c.read_many(target, items)
+                    got = {}
+                    for (t, i, p, _), v in zip(items, vals):
+                        got.setdefault((t, i), {})[p] = v
+                for o in chunk:
+                    out[o].update(got.get(o, {}))
+            return out
+
+    def bacnet_who_has(self, src_ip: str, broadcast: str, name: str) -> list[dict]:
+        from . import bacnet_client as bc
+        return bc.who_has(src_ip, broadcast, name)
+
 
 def _ipaddr(ip: str) -> int:
     """IPv4 string → IPAddr (network byte order in a ULONG)."""
@@ -176,6 +211,151 @@ class FakeProber(Prober):
                     "key": f"{b}.10|2:05", "route": "net 2, MAC 5", "vendor": "Siemens Schweiz AG",
                     "name": "RA L2-03 (MS/TP)", "model": "DXR2.M18-101A"})
         return [d for d in out if self._here(d["ip"]) and not (d["route"] and "mstp" in self.gone)]
+
+    # ---- demo object lists (Desigo-style names)
+    _FAKE_IPS = {2501: (10, None), 2502: (11, None), 2503: (12, None), 2601: (10, (2, b"\x05"))}
+
+    def _fake_objects(self, instance: int) -> dict:
+        import random
+        from . import bacnet_client as bc
+        P = bc.P
+        rnd = random.Random(instance)
+        objs: dict = {}
+        ok = {"bits": [False, False, False, False]}
+
+        def add(t, i, name, desc, pv, units=None, cmd=False, prio=None, states=None, texts=None, flags=None, oos=False, rel=0, es=0,
+                relinquish=None):
+            if prio:                                  # commanded: the highest priority in use wins
+                pv = prio[min(prio)]
+            p = {P["object-name"]: name, P["description"]: desc, P["present-value"]: pv,
+                 P["status-flags"]: flags or ({"bits": [False, False, False, oos]}),
+                 P["out-of-service"]: oos, P["event-state"]: {"enum": es}, P["reliability"]: {"enum": rel}}
+            if units is not None:
+                p[P["units"]] = {"enum": units}
+            if cmd:
+                pa = [None] * 16
+                for lvl, v in (prio or {}).items():
+                    pa[lvl - 1] = v
+                p[P["priority-array"]] = pa
+                p[P["relinquish-default"]] = relinquish if relinquish is not None else pv
+            if states:
+                p[P["state-text"]] = states
+                p[P["number-of-states"]] = len(states)
+            if texts:
+                p[P["inactive-text"]], p[P["active-text"]] = texts
+            objs[(t, i)] = p
+
+        if instance == 2501:                        # PXC automation station: an AHU's worth of points
+            pre = "AS01'AHU1'"
+            for k, (nm, d, u, lo, hi) in enumerate([("SupTmp", "Supply air temperature", 62, 16, 20), ("RetTmp", "Return air temperature", 62, 20, 23),
+                                                     ("OaTmp", "Outside air temperature", 62, 4, 12), ("ExhTmp", "Exhaust air temperature", 62, 19, 22),
+                                                     ("SupHum", "Supply air humidity", 29, 35, 50), ("FltDp", "Filter differential pressure", 53, 80, 260),
+                                                     ("SupPrs", "Supply duct pressure", 53, 250, 320), ("FrstTmp", "Frost coil temperature", 62, 8, 14)], start=1):
+                add(0, k, pre + nm, d, round(rnd.uniform(lo, hi), 1), u)
+            add(0, 9, pre + "CO2Ret", "Return air CO2", 712.0, 96, flags={"bits": [False, True, False, False]}, rel=1, es=1)   # no sensor
+            for k in range(10, 41):
+                add(0, k, f"{pre}Zn{k - 9:02d}Tmp", f"Zone {k - 9} temperature", round(rnd.uniform(19.5, 23.5), 1), 62)
+            add(1, 1, pre + "VlvHtg", "Heating valve", 34.0, 98, cmd=True)
+            add(1, 2, pre + "VlvClg", "Cooling valve", 0.0, 98, cmd=True)
+            add(1, 3, pre + "SupFanSpd", "Supply fan speed", 65.0, 98, cmd=True, prio={8: 80.0}, relinquish=0.0)
+            add(1, 4, pre + "ExhFanSpd", "Extract fan speed", 60.0, 98, cmd=True)
+            add(1, 5, pre + "DmprOa", "Outside air damper", 100.0, 98, cmd=True)
+            for k, (nm, d) in enumerate([("SupFanRun", "Supply fan running"), ("ExhFanRun", "Extract fan running"), ("FrstStat", "Frost stat"),
+                                         ("FltAlm", "Filter dirty alarm"), ("FireAlm", "Fire alarm input"), ("PmpHtgRun", "Heating pump running")], start=1):
+                add(3, k, pre + nm, d, {"enum": 0 if "Alm" in nm or "Frst" in nm else 1}, texts=("Normal", "Alarm") if "Alm" in nm or "Frst" in nm else ("Off", "On"),
+                    flags={"bits": [nm == "FltAlm", False, False, False]}, es=2 if nm == "FltAlm" else 0)
+            objs[(3, 4)][P["present-value"]] = {"enum": 1}
+            for k, (nm, d) in enumerate([("SupFanCmd", "Supply fan command"), ("ExhFanCmd", "Extract fan command"), ("PmpHtgCmd", "Heating pump command")], start=1):
+                add(4, k, pre + nm, d, {"enum": 1}, cmd=True, texts=("Off", "On"), prio={16: {"enum": 1}},
+                    flags={"bits": [False, False, nm == "ExhFanCmd", False]})      # extract fan on its hand switch
+            add(4, 4, pre + "PmpClgCmd", "Cooling pump command", {"enum": 0}, cmd=True, texts=("Off", "On"), oos=True)
+            add(2, 1, pre + "SpSupTmp", "Supply temperature setpoint", 18.0, 62, cmd=True)
+            add(2, 2, pre + "SpSupPrs", "Supply pressure setpoint", 280.0, 53, cmd=True, prio={8: 300.0}, relinquish=280.0)
+            for k in range(3, 26):
+                add(2, k, f"{pre}Prm{k:02d}", f"Parameter {k}", round(rnd.uniform(0, 100), 1), 95)
+            add(19, 1, pre + "OpMod", "Plant operating mode", 2, states=["Off", "Comfort", "Economy", "Night purge", "Frost protection"], cmd=True)
+            add(17, 1, "AS01'Sch'AHU1", "AHU1 time schedule", {"enum": 1})
+            for k in range(1, 9):
+                add(20, k, f"AS01'TL'AHU1'{k:02d}", f"Trend log {k}", None)
+                del objs[(20, k)][P["present-value"]]
+            add(15, 1, "AS01'NC'Urgent", "Notification class urgent", None)
+            del objs[(15, 1)][P["present-value"]]
+        else:                                       # DXR2 room controller
+            nn = {2502: "RA01", 2503: "RA02", 2601: "RA03"}.get(instance, f"RA{instance % 100:02d}")
+            pre = f"L2'{nn}'"
+            add(0, 1, pre + "RTmp", "Room temperature", round(rnd.uniform(20.5, 22.8), 1), 62)
+            add(0, 2, pre + "RHuRel", "Room humidity", round(rnd.uniform(38, 52), 1), 29)
+            add(0, 3, pre + "RCO2", "Room CO2", round(rnd.uniform(450, 900)), 96)
+            add(2, 1, pre + "SpTRCmf", "Comfort setpoint", 21.0, 62, cmd=True, prio={8: 23.5} if instance == 2503 else None, relinquish=21.0)
+            add(2, 2, pre + "SpTREco", "Economy setpoint", 18.0, 62, cmd=True)
+            add(2, 3, pre + "SpTRShft", "Setpoint shift (room unit)", 0.5, 63, cmd=True)
+            add(1, 1, pre + "VlvHtg", "Heating valve", round(rnd.uniform(0, 60)), 98, cmd=True)
+            add(1, 2, pre + "VlvClg", "Cooling valve", 0.0, 98, cmd=True, oos=instance == 2502)
+            add(4, 1, pre + "Fan", "Fan", {"enum": 1}, cmd=True, texts=("Off", "On"))
+            add(3, 1, pre + "PrsDet", "Presence detector", {"enum": 1}, texts=("Unoccupied", "Occupied"))
+            add(3, 2, pre + "WndwCnt", "Window contact", {"enum": 1 if instance == 2503 else 0}, texts=("Closed", "Open"),
+                flags={"bits": [instance == 2503, False, False, False]}, es=2 if instance == 2503 else 0)
+            add(19, 1, pre + "OpMod", "Room operating mode", 1, states=["Comfort", "Precomfort", "Economy", "Protection"], cmd=True)
+            add(19, 2, pre + "FanSpd", "Fan speed", 2, states=["Off", "Stage 1", "Stage 2", "Stage 3"], cmd=True,
+                prio={8: 4} if instance == 2502 else None, relinquish=2)
+            add(5, 1, pre + "OccOvr", "Occupancy override", {"enum": 0}, cmd=True, texts=("Off", "On"))
+            for k in range(10, 22):
+                add(2, k, f"{pre}Prm{k:02d}", f"Control parameter {k}", round(rnd.uniform(0, 10), 2), 95)
+            add(20, 1, f"{pre}TL'RTmp", "Room temperature trend", None)
+            del objs[(20, 1)][P["present-value"]]
+        objs[(8, instance)] = {P["object-name"]: self._FAKE_DEVICES.get(instance, (f"Device {instance}",))[0]}
+        return objs
+
+    def bacnet_objects(self, src_ip, target, instance, cancel, progress):
+        from . import bacnet_client as bc
+        if target.ip.rsplit(".", 1)[-1] in self.gone:
+            raise bc.BacnetError("timeout", "no reply")
+        objs = self._fake_objects(instance)
+        n = len(objs)
+        progress("object list", 0, n)
+        time.sleep(0.3)
+        out = {}
+        for k, (oid, props) in enumerate(objs.items(), start=1):
+            if cancel():
+                break
+            out[oid] = props
+            if k % 8 == 0:
+                progress("objects", k, n)
+                time.sleep(0.04 if n < 100 else 0.02)
+        progress("objects", n, n)
+        return out
+
+    def bacnet_values(self, src_ip, target, objects):
+        import random
+        from . import bacnet_client as bc
+        inst = next((i for i, (last, route) in self._FAKE_IPS.items()
+                     if target.ip.endswith(f".{last}") and (route is None) == (target.dnet is None)), None)
+        objs = self._fake_objects(inst) if inst else {}
+        out = {}
+        for o in objects:
+            p = dict(objs.get(o, {}))
+            pv = p.get(bc.P["present-value"])
+            if isinstance(pv, float) and o[0] in (0,):
+                p[bc.P["present-value"]] = round(pv + random.uniform(-0.3, 0.3), 1)
+            out[o] = p
+        time.sleep(0.1)
+        return out
+
+    def bacnet_who_has(self, src_ip, broadcast, name):
+        time.sleep(0.6)
+        b = self._base(src_ip)
+        out = []
+        for inst, (last, route) in self._FAKE_IPS.items():
+            ip = f"{b}.{last}"
+            if not self._here(ip):
+                continue
+            for oid, props in self._fake_objects(inst).items():
+                if props.get(77) == name and oid[0] != 8:
+                    from . import bacnet
+                    key = bacnet.device_key(ip, route[0] if route else None, route[1] if route else None)
+                    out.append({"device": inst, "object": list(oid), "name": name, "ip": ip, "key": key,
+                                "route": bacnet.route_text(route[0], route[1]) if route else None})
+        return out
 
     def discover_extra(self) -> dict:
         """Demo observations: a BMS subnet with broadcasts + BACnet, and a second subnet with no broadcasts."""

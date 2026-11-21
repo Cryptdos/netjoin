@@ -66,11 +66,88 @@ class PingSession:
         self._stop.set()
 
 
+class ObjectsJob:
+    """A read that takes a while (a device's object list, or firmware across a network), with progress."""
+    _ids = itertools.count(1)
+
+    def __init__(self, device: dict | None, kind: str = "objects"):
+        self.id = next(self._ids)
+        self.kind = kind
+        self.device_id = device["id"] if device else None
+        self.phase, self.done, self.total = "starting", 0, 0
+        self.finished, self.error, self.cancelled = False, None, False
+        self._cancel = threading.Event()
+
+    def progress(self, phase: str, done: int, total: int):
+        self.phase, self.done, self.total = phase, done, total
+
+    def to_dict(self) -> dict:
+        return {"job": self.id, "kind": self.kind, "device_id": self.device_id, "phase": self.phase, "done": self.done,
+                "total": self.total, "finished": self.finished, "error": self.error, "cancelled": self.cancelled,
+                "summary": getattr(self, "summary", None)}
+
+
+def _state_or(v, t, props):
+    """A multi-state number as its state text where the device gives one."""
+    st = props.get(bc.P["state-text"])
+    if t in bc.MULTISTATE and isinstance(v, int) and isinstance(st, list) and 0 < v <= len(st) and isinstance(st[v - 1], str):
+        return st[v - 1]
+    return bc.fmt_value(v, t, props)
+
+
+def format_object(oid: tuple[int, int], props: dict) -> dict:
+    """Raw property values → what the object list shows."""
+    t, i = oid
+    P = bc.P
+    val = lambda pid: props.get(pid)
+    good = lambda pid: not isinstance(val(pid), bc.BacnetError) and pid in props
+    sf = val(P["status-flags"])
+    bits = sf["bits"] if isinstance(sf, dict) and "bits" in sf else []
+    flags = {k: bool(bits[n]) if len(bits) > n else False for n, k in enumerate(("alarm", "fault", "overridden", "oos"))}
+    if good(P["out-of-service"]) and val(P["out-of-service"]) is True:
+        flags["oos"] = True
+    pv = val(P["present-value"])
+    units = val(P["units"]) if good(P["units"]) else None
+    unit_txt = bc.UNITS.get(units["enum"], f"units #{units['enum']}") if isinstance(units, dict) and "enum" in units else ""
+    if t in bc.MULTISTATE and isinstance(pv, int) and good(P["state-text"]):
+        st = val(P["state-text"])
+        st = st if isinstance(st, list) else [st]
+        value = st[pv - 1] if 0 < pv <= len(st) and isinstance(st[pv - 1], str) else str(pv)
+    elif P["present-value"] in props:
+        value = bc.fmt_value(pv, t, props)
+    else:
+        value = ""
+    pa = val(P["priority-array"]) if good(P["priority-array"]) else None
+    prio = []
+    if isinstance(pa, list):
+        for level, v in enumerate(pa, start=1):
+            if v is not None and not (isinstance(v, dict) and not v):
+                txt = bc.fmt_value(v, t, props)
+                if t in bc.MULTISTATE and isinstance(v, int) and good(P["state-text"]):
+                    st = val(P["state-text"]); st = st if isinstance(st, list) else [st]
+                    txt = st[v - 1] if 0 < v <= len(st) else txt
+                prio.append({"level": level, "value": txt})
+    es = val(P["event-state"])
+    rel = val(P["reliability"])
+    name = val(P["object-name"])
+    desc = val(P["description"])
+    return {"type": t, "inst": i, "short": bc.SHORT_TYPES.get(t, str(t)), "type_name": bc.OBJECT_TYPES.get(t, f"type {t}"),
+            "name": name if isinstance(name, str) else "", "description": desc if isinstance(desc, str) else "",
+            "value": value, "units": unit_txt, "flags": flags,
+            "event_state": bc.EVENT_STATE.get(es["enum"], str(es["enum"])) if isinstance(es, dict) and "enum" in es else None,
+            "reliability": bc.RELIABILITY.get(rel["enum"], str(rel["enum"])) if isinstance(rel, dict) and "enum" in rel and rel["enum"] != 0 else None,
+            "priority": prio, "commanded": bool(prio),
+            "relinquish_default": _state_or(val(P["relinquish-default"]), t, props) if good(P["relinquish-default"]) else None,
+            "error": val(P["object-name"]).detail if isinstance(val(P["object-name"]), bc.BacnetError) else None}
+
+
 class DeviceTools:
     def __init__(self, engine, prober: Prober):
         self.engine, self.prober, self.store, self.log = engine, prober, engine.store, engine.log
         self.sessions: dict[int, PingSession] = {}
         self._lock = threading.Lock()
+        self.jobs: dict[int, ObjectsJob] = {}
+        self.objects: dict[int, dict] = {}        # device id → {"read_at", "objects": [...]} (kept in memory)
 
     # ---------- helpers
     def _src_ip(self) -> str:
@@ -185,6 +262,153 @@ class DeviceTools:
         diff = (dev - datetime.now()).total_seconds()
         return {"device": dev.isoformat(sep=" "), "laptop": datetime.now().replace(microsecond=0).isoformat(sep=" "),
                 "diff_s": round(diff)}
+
+    # ---------- object list (v0.11)
+    def objects_start(self, device_id: int) -> dict:
+        d = self.device(device_id)
+        if d.get("bacnet_instance") is None:
+            raise DeviceToolError("This isn't a BACnet device")
+        self._need_subnet(d)
+        for j in self.jobs.values():
+            if j.device_id == device_id and not j.finished:
+                return j.to_dict()
+        job = ObjectsJob(d)
+        self.jobs[job.id] = job
+        src = self._src_ip()
+        threading.Thread(target=self._objects_run, args=(job, d, src), daemon=True, name=f"objects-{device_id}").start()
+        return job.to_dict()
+
+    def _objects_run(self, job: ObjectsJob, d: dict, src: str):
+        t0 = time.monotonic()
+        try:
+            raw = self.prober.bacnet_objects(src, bc.target_from_key(d["key"]), d["bacnet_instance"],
+                                             cancel=job._cancel.is_set, progress=job.progress)
+            objs = [format_object(oid, props) for oid, props in raw.items() if oid[0] != 8]
+            objs.sort(key=lambda o: (o["type"], o["inst"]))
+            if job._cancel.is_set():
+                job.cancelled = True
+            self.objects[d["id"]] = {"read_at": datetime.now(timezone.utc).isoformat(), "objects": objs,
+                                     "partial": job.cancelled, "seconds": round(time.monotonic() - t0, 1)}
+            self.log.add(f"Read {len(objs)} object(s) from device {d['bacnet_instance']} ({d['ip']}) in "
+                         f"{time.monotonic() - t0:.1f} s" + (" – cancelled part-way" if job.cancelled else ""))
+        except bc.BacnetError as e:
+            job.error = f"No answer from device {d['bacnet_instance']} ({e.detail})"
+            self.log.add(job.error, "warn")
+        except Exception as e:        # never leave the page spinning
+            job.error = f"Reading objects failed: {e}"
+            self.log.add(job.error, "error")
+        finally:
+            job.finished = True
+
+    def job(self, jid: int) -> dict:
+        return self.objects_job(jid)
+
+    def objects_job(self, jid: int) -> dict:
+        j = self.jobs.get(jid)
+        if not j:
+            raise DeviceToolError("That read has finished")
+        return j.to_dict()
+
+    def objects_cancel(self, jid: int) -> dict:
+        j = self.jobs.get(jid)
+        if j:
+            j._cancel.set()
+        return {"ok": True}
+
+    def objects_get(self, device_id: int) -> dict | None:
+        return self.objects.get(device_id)
+
+    def objects_refresh(self, device_id: int, which: list[list[int]] | None = None) -> dict:
+        """Re-read present value + status flags (+ priority array) of objects already listed: quick."""
+        d = self.device(device_id)
+        self._need_subnet(d)
+        cached = self.objects.get(device_id)
+        if not cached:
+            raise DeviceToolError("Read the object list first")
+        want = {tuple(x) for x in which} if which else None
+        objs = [o for o in cached["objects"] if want is None or (o["type"], o["inst"]) in want][:400]
+        try:
+            fresh = self.prober.bacnet_values(self._src_ip(), bc.target_from_key(d["key"]), [(o["type"], o["inst"]) for o in objs])
+        except bc.BacnetError as e:
+            raise DeviceToolError(f"No answer from device {d['bacnet_instance']} ({e.detail})")
+        by = {(o["type"], o["inst"]): o for o in cached["objects"]}
+        for oid, props in fresh.items():
+            o = by.get(oid)
+            if not o:
+                continue
+            f = format_object(oid, {**props, bc.P["object-name"]: o["name"], bc.P["description"]: o["description"]})
+            for k in ("value", "flags", "priority", "commanded", "event_state", "reliability"):
+                o[k] = f[k]
+        cached["refreshed_at"] = datetime.now(timezone.utc).isoformat()
+        return {"read_at": cached["read_at"], "refreshed_at": cached["refreshed_at"],
+                "objects": [by[(o["type"], o["inst"])] for o in objs]}
+
+    # ---------- firmware across a network (feeds the health checks)
+    def firmware_start(self, node_id: int) -> dict:
+        a = self.engine.adapter()
+        if not a or not a.primary:
+            raise DeviceToolError("The adapter has no IPv4 address – Join a network first")
+        here = ipaddress.ip_network(f"{a.primary.ip}/{a.primary.prefix}", strict=False)
+        devs = [x for x in self.store.devices_for_node(node_id)["devices"]
+                if x.get("bacnet_instance") is not None and not x["inactive"] and ipaddress.ip_network(x["subnet"]) == here]
+        if not devs:
+            raise DeviceToolError(f"No BACnet devices here on {here} (the subnet the laptop is on) – Join one of the networks and scan first")
+        for j in self.jobs.values():
+            if j.kind == "firmware" and not j.finished:
+                return j.to_dict()
+        job = ObjectsJob(None, "firmware")
+        self.jobs[job.id] = job
+        threading.Thread(target=self._firmware_run, args=(job, devs, a.primary.ip), daemon=True, name="firmware").start()
+        return job.to_dict()
+
+    def _firmware_run(self, job: ObjectsJob, devs: list[dict], src: str):
+        ok = 0
+        try:
+            for k, d in enumerate(devs):
+                if job._cancel.is_set():
+                    job.cancelled = True
+                    break
+                job.progress("firmware", k, len(devs))
+                try:
+                    props = self.prober.bacnet_device_props(src, bc.target_from_key(d["key"]), d["bacnet_instance"])
+                except bc.BacnetError:
+                    continue
+                v = lambda n: props.get(n) if isinstance(props.get(n), str) else None
+                self.store.set_device_props(d["id"], v("firmware-revision"), v("application-software-version"),
+                                            name=v("object-name"), model=v("model-name"), vendor=v("vendor-name"))
+                ok += 1
+            job.progress("firmware", len(devs), len(devs))
+            job.summary = f"Read firmware from {ok} of {len(devs)} device(s)"
+            self.log.add(job.summary)
+        except Exception as e:
+            job.error = f"Reading firmware failed: {e}"
+        finally:
+            job.finished = True
+
+    # ---------- Who-Has: which controller holds a point called …
+    def who_has(self, name: str) -> dict:
+        name = (name or "").strip()
+        if not name:
+            raise DeviceToolError("Type an object name")
+        a = self.engine.adapter()
+        if not a or not a.primary:
+            raise DeviceToolError("The adapter has no IPv4 address – Join a network first")
+        net = ipaddress.ip_network(f"{a.primary.ip}/{a.primary.prefix}", strict=False)
+        found = self.prober.bacnet_who_has(a.primary.ip, str(net.broadcast_address), name)
+        subnet = str(net)
+        known = {(x["bacnet_instance"], x["key"]): x for x in self.store.devices(subnet) if x.get("bacnet_instance") is not None}
+        by_inst = {x["bacnet_instance"]: x for x in known.values()}
+        nets = self.store.networks_for_subnet(subnet)
+        out = []
+        for r in found:
+            dev = known.get((r["device"], r["key"])) or by_inst.get(r["device"])
+            t, i = r["object"]
+            out.append({"device": r["device"], "ip": r["ip"], "route": r.get("route"), "object": f"{bc.SHORT_TYPES.get(t, t)} {i}",
+                        "type_name": bc.OBJECT_TYPES.get(t, str(t)), "name": r["name"],
+                        "device_id": dev["id"] if dev else None, "device_name": dev["name"] if dev else None,
+                        "network_id": nets[0]["id"] if nets and dev else None})
+        self.log.add(f"Who-Has '{name}' on {subnet}: {len(out)} answer(s)")
+        return {"name": name, "subnet": subnet, "results": out}
 
     # ---------- ports
     def check_ports(self, device_id: int) -> dict:
