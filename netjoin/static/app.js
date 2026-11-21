@@ -219,10 +219,12 @@ function treeDeviceItem(x, netId) {
   return el("li", {}, el("div", { class: "item dev" + (state.selected === key ? " sel" : "") + (x.inactive ? " gone" : "") + (x.pending ? " pending" : ""),
       title: x.inactive ? "Missing – didn't answer the latest scan" : null },
     el("span", { class: "tog" }, ""),
-    el("button", { type: "button", class: "lbl", onclick: () => openDevice(x.id, netId) },
+    // Two tight lines: name (or IP) [+ instance], then IP / vendor underneath
+    el("button", { type: "button", class: "lbl", onclick: () => openDevice(x.id, netId), title: [devLabel(x), x.ip, x.vendor || x.mac_vendor].filter(Boolean).join(" · ") },
       el("span", { class: "dot " + (x.inactive ? "warn" : x.pending ? "off" : "up"), "aria-hidden": "true" }),
-      el("span", { class: "nm" }, devLabel(x)),
-      el("span", { class: "sub" }, x.bacnet_instance != null ? `#${x.bacnet_instance}` : (x.mac_vendor || x.vendor || "")))));
+      el("span", { class: "dtext" },
+        el("span", { class: "nm" }, devLabel(x), x.bacnet_instance != null ? el("span", { class: "inst" }, ` #${x.bacnet_instance}`) : null),
+        el("span", { class: "dsub" }, (x.bacnet_instance != null ? [x.ip, x.vendor || x.mac_vendor] : [x.mac_vendor || x.vendor]).filter(Boolean).join(" · ") || null)))));
 }
 async function openDevice(id, netId) {
   state.selected = devKey(id, netId);

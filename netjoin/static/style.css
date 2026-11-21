@@ -73,7 +73,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,.btn:focus-visib
 
 .body{flex-grow:1;display:flex;flex-wrap:wrap;align-items:stretch;gap:16px;padding:16px}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:16px 20px}
-.sidebar{flex:1 1 280px;max-width:360px;display:flex;flex-direction:column;gap:10px;padding:14px}
+.sidebar{flex:0 0 320px;width:320px;min-width:0;display:flex;flex-direction:column;gap:10px;padding:14px}
 .side-actions{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line2);padding-top:12px}
 .main{flex:999 1 560px;min-width:0;display:flex;flex-direction:column;gap:16px}
 .lower{flex-grow:1;display:flex;flex-wrap:wrap;gap:16px;align-items:stretch}
@@ -217,7 +217,7 @@ table.dev td.small{min-width:110px}
 }
 
 @media (max-width: 900px){
-  .sidebar{max-width:none;flex-basis:100%}
+  .sidebar{max-width:none;flex-basis:100%;width:auto}
   .tree{max-height:40vh;overflow-y:auto}
   .side-actions{flex-direction:row;flex-wrap:wrap}
   .side-actions .btn{flex:1 1 200px}
@@ -617,3 +617,16 @@ table.objs tr.alarm td.oval{color:var(--err)}
 .tabs{flex:none}
 #healthDlg,#whoHasDlg{width:min(780px,94vw)}
 #healthDlg .wide-dlg,#whoHasDlg .wide-dlg{width:auto;padding:20px 22px}
+
+/* v0.11.1 Sites list: fixed width, scrolls sideways rather than growing; devices on two tight lines */
+.tree{overflow-x:auto}
+.tree{width:auto;max-width:100%}
+.tree>li,.tree ul{min-width:100%;width:max-content}
+.tree .lbl .nm{overflow:visible;text-overflow:clip}
+.tree .item.dev .lbl{align-items:flex-start;padding-top:3px;padding-bottom:3px}
+.tree .item.dev .dot{margin-top:6px;flex:none}
+.tree .item.dev .dtext{display:flex;flex-direction:column;line-height:1.2;min-width:0}
+.tree .item.dev .nm{white-space:nowrap}
+.tree .item.dev .inst{font-family:var(--mono);font-size:11px;color:var(--muted);font-weight:400}
+.tree .item.dev .dsub{font-size:11px;color:var(--muted);font-weight:400;white-space:nowrap}
+.tree .item.dev .dsub:empty{display:none}
