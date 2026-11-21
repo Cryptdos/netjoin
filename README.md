@@ -17,6 +17,8 @@ Design notes: [docs/network-join-tool.md](docs/network-join-tool.md)
 
 **v0.6.0 (branch `v0.6`, being tested):** network editor with IP Network + mask, allowed range or static IP, allocation order (first / last / random / last used); Discover fixes for quiet BACnet-only networks and DHCP masks; adapter followed by MAC (USB dongles); device roll-up on sites and areas with search, sorting, filters, inactive devices and CSV export; per-site export / import; clickable breadcrumbs, hideable Sites list, IP history drop-down. Details: [docs/v0.6-plan.md](docs/v0.6-plan.md).
 
+**v0.9.1 (branch `v0.9.1`, being tested):** device list – network column shows `Level 2 › FCUs` as a link, multi-vendor filter, shown / total / missing counts, **Import CSV** of devices that should be there (missing ones show after a scan). Details: [docs/v0.9.1-device-list.md](docs/v0.9.1-device-list.md). Next ideas: [docs/device-tools-plan.md](docs/device-tools-plan.md).
+
 **v0.9.0 (branch `v0.9`, being tested):** drag to reorder the Sites list and drop networks / areas onto an area to nest them – always within the same site; Edit → Inside does the same without a mouse. Details: [docs/v0.9-arrange-sites.md](docs/v0.9-arrange-sites.md).
 
 **v0.8.0 (branch `v0.8`, first build for feedback):** one top bar – breadcrumbs, page title and page buttons merged with the app bar; adapter, address, network and internet in a connection chip with a drop-down panel. Details: [docs/v0.8-top-bar.md](docs/v0.8-top-bar.md).
