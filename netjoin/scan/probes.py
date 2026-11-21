@@ -44,6 +44,12 @@ class Prober:
     def who_is(self, src_ip: str, prefix: int, cancel, log) -> list[dict]:
         return bacnet.who_is(src_ip, prefix, cancel=cancel, log=log)
 
+    # ---- per-device BACnet reads (device pages); read-only
+    def bacnet_device_props(self, src_ip: str, target, instance: int) -> dict:
+        from . import bacnet_client as bc
+        with bc.Client(src_ip) as c:
+            return bc.read_device_properties(c, target, instance)
+
 
 def _ipaddr(ip: str) -> int:
     """IPv4 string → IPAddr (network byte order in a ULONG)."""
@@ -122,8 +128,36 @@ class FakeProber(Prober):
         return self._hosts(src_ip).get(ip) if self._here(ip) else None
 
     def ping(self, ip, src_ip, timeout_ms=600):
+        import random
         time.sleep(0.004)
-        return 2.0 if ip in self._hosts(src_ip) and not ip.endswith(".12") and self._here(ip) else None
+        if not (ip in self._hosts(src_ip) and not ip.endswith(".12") and self._here(ip)):
+            return None
+        return round(random.uniform(0.8, 3.6), 1) if random.random() > 0.03 else None    # the odd lost reply
+
+    _FAKE_DEVICES = {
+        2501: ("AS01 East Panel", "PXC5.E003", "FW=04.21.040", "AS01_East_v2.3"),
+        2502: ("RA L2-01", "DXR2.E18-102A", "FW=02.20.010", "Hvac_01.31"),
+        2503: ("RA L2-02", "DXR2.E18-102A", "FW=02.10.004", "Hvac_01.31"),     # older firmware than its twin
+        2601: ("RA L2-03 (MS/TP)", "DXR2.M18-101A", "FW=02.20.010", "Hvac_01.29"),
+    }
+
+    def bacnet_device_props(self, src_ip, target, instance):
+        from . import bacnet_client as bc
+        time.sleep(0.15)
+        if target.ip.rsplit(".", 1)[-1] in self.gone:
+            raise bc.BacnetError("timeout", "no reply")
+        name, model, fw, app = self._FAKE_DEVICES.get(instance, (f"Device {instance}", "Unknown", "1.0", "1.0"))
+        now = time.localtime()
+        skew = 0 if instance != 2503 else 437          # one controller with a clock seven minutes out
+        t = time.localtime(time.time() + skew)
+        return {"object-name": name, "vendor-name": "Siemens Schweiz AG", "vendor-identifier": 7, "model-name": model,
+                "firmware-revision": fw, "application-software-version": app, "protocol-version": 1,
+                "protocol-revision": 14 if instance != 2501 else 19, "location": "Level 2" if instance != 2501 else "Plant room",
+                "description": "Room automation" if instance != 2501 else "Automation station",
+                "system-status": {"enum": 0}, "max-apdu-length-accepted": 1476 if instance == 2501 else 480,
+                "segmentation-supported": {"enum": 0 if instance == 2501 else 3}, "database-revision": 12,
+                "local-date": {"date": time.strftime("%Y-%m-%d", t)}, "local-time": {"time": time.strftime("%H:%M:%S", t)},
+                "utc-offset": 0, "serial-number": {"error": "unknown property"}}
 
     def tcp(self, ip, port, src_ip):
         return (ip.endswith(".10") or ip.endswith(".11")) and port in (80, 443) or (ip.endswith(".1") and port == 443)

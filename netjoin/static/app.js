@@ -181,7 +181,63 @@ async function refreshTree() {
 function matches(n, q) {
   if (!q) return true;
   const hay = `${n.name} ${n.subnet || ""}`.toLowerCase();
-  return hay.includes(q) || (n.children || []).some((c) => matches(c, q));
+  return hay.includes(q) || (n.kind === "network" && searchHits(n.id).length > 0) || (n.children || []).some((c) => matches(c, q));
+}
+
+// ---------- devices in the Sites list (v0.10) ----------
+// A network's devices load when its branch is opened; nothing is scanned for this.
+state.netDevices = {};          // network id → device rows (null while loading)
+state.devSearch = [];           // devices matching the Sites search box
+const isDevSel = () => typeof state.selected === "string" && state.selected.startsWith("dev:");
+const devSel = () => { const [, id, net] = state.selected.split(":"); return { id: Number(id), net: Number(net) }; };
+const devKey = (id, net) => `dev:${id}:${net}`;
+const searchHits = (netId) => state.devSearch.filter((x) => (x.network_ids || []).includes(netId));
+const devLabel = (x) => x.bacnet_instance != null ? (x.name || `Device ${x.bacnet_instance}`) : x.ip;
+function treeDeviceOrder(rows) {
+  return rows.filter((x) => !x.is_self).sort((a, b) => {
+    const ab = a.bacnet_instance != null, bb = b.bacnet_instance != null;
+    if (ab !== bb) return ab ? -1 : 1;                                  // BACnet first
+    if (ab) return devLabel(a).localeCompare(devLabel(b), undefined, { numeric: true }) || a.bacnet_instance - b.bacnet_instance;
+    return ipKey(a.ip) < ipKey(b.ip) ? -1 : ipKey(a.ip) > ipKey(b.ip) ? 1 : 0;
+  });
+}
+async function loadNetDevices(id) {
+  state.netDevices[id] = null;
+  try { state.netDevices[id] = (await api(`/devices?node_id=${id}`)).devices; } catch (e) { state.netDevices[id] = []; }
+  renderTree();
+}
+function treeDeviceItems(n, q) {
+  if (q) return searchHits(n.id).map((x) => treeDeviceItem(x, n.id));
+  const rows = state.netDevices[n.id];
+  if (rows === undefined) { loadNetDevices(n.id); return [el("li", { class: "empty small" }, "Loading…")]; }
+  if (rows === null) return [el("li", { class: "empty small" }, "Loading…")];
+  const list = treeDeviceOrder(rows);
+  return list.length ? list.map((x) => treeDeviceItem(x, n.id)) : [el("li", { class: "empty small" }, "No devices yet – Join and Scan")];
+}
+function treeDeviceItem(x, netId) {
+  const key = devKey(x.id, netId);
+  return el("li", {}, el("div", { class: "item dev" + (state.selected === key ? " sel" : "") + (x.inactive ? " gone" : "") + (x.pending ? " pending" : ""),
+      title: x.inactive ? "Missing – didn't answer the latest scan" : null },
+    el("span", { class: "tog" }, ""),
+    el("button", { type: "button", class: "lbl", onclick: () => openDevice(x.id, netId) },
+      el("span", { class: "dot " + (x.inactive ? "warn" : x.pending ? "off" : "up"), "aria-hidden": "true" }),
+      el("span", { class: "nm" }, devLabel(x)),
+      el("span", { class: "sub" }, x.bacnet_instance != null ? `#${x.bacnet_instance}` : (x.mac_vendor || x.vendor || "")))));
+}
+async function openDevice(id, netId) {
+  state.selected = devKey(id, netId);
+  for (let p = netId; p != null; p = parentOf(p)) state.expanded.add(p);
+  saveUi(); renderTree(); await refreshDetail();
+}
+let devSearchTimer = null;
+function searchDevicesSoon() {
+  clearTimeout(devSearchTimer);
+  const q = $("#search").value.trim();
+  if (q.length < 2) { state.devSearch = []; renderTree(); return; }
+  devSearchTimer = setTimeout(async () => {
+    try { state.devSearch = await api(`/devices/search?q=${encodeURIComponent(q)}`); } catch (e) { state.devSearch = []; }
+    if ($("#search").value.trim() === q) renderTree();
+  }, 220);
 }
 
 function renderTree() {
@@ -191,8 +247,8 @@ function renderTree() {
     const open = q || state.expanded.has(n.id);
     const item = el("div", { class: "item" + (state.selected === n.id ? " sel" : ""), "data-id": n.id, draggable: q ? null : "true",
         title: q ? null : "Drag to reorder, or drop onto a site / area to move it inside" },
-      el("button", { type: "button", class: "tog", "aria-label": open ? "Collapse" : "Expand", "aria-expanded": kids.length ? String(!!open) : null,
-        onclick: () => { open ? state.expanded.delete(n.id) : state.expanded.add(n.id); saveUi(); renderTree(); } }, kids.length ? (open ? "▾" : "▸") : ""),
+      el("button", { type: "button", class: "tog", "aria-label": open ? "Collapse" : "Expand", "aria-expanded": kids.length || n.kind === "network" ? String(!!open) : null,
+        onclick: () => { open ? state.expanded.delete(n.id) : state.expanded.add(n.id); saveUi(); renderTree(); } }, kids.length || n.kind === "network" ? (open ? "▾" : "▸") : ""),
       el("button", { type: "button", class: "lbl", onclick: () => select(n) },
         n.kind !== "network" ? el("span", { class: "kind" }, n.kind === "site" ? "Site" : "Area") : null,
         el("span", { class: "nm" }, n.name),
@@ -200,6 +256,7 @@ function renderTree() {
         n.kind === "network" ? el("span", { class: "sub" }, n.subnet || "") : null),
       n.kind !== "network" ? el("button", { type: "button", class: "add", title: `Add inside ${n.name}`, "aria-label": `Add inside ${n.name}`,
         onclick: () => openNode({ parent: n }) }, "+ add") : null);
+    if (n.kind === "network") return el("li", {}, item, open ? el("ul", { class: "devs" }, treeDeviceItems(n, q)) : null);
     return el("li", {}, item, kids.length && open ? el("ul", {}, build(kids)) : null);
   });
   const nodes = build(state.tree);
@@ -341,6 +398,247 @@ async function handleLive(live) {
   if (state.selected === live.network_id || state.selected === "home") refreshDetail();
 }
 
+// ---------- device page (v0.10): read / observe / connect – nothing is written to the device ----------
+state.devTab = "overview";
+state.devProps = {};            // device id → last BACnet properties read
+const PROP_LABEL = { "object-name": "Name", "vendor-name": "Vendor", "vendor-identifier": "Vendor ID", "model-name": "Model",
+  "firmware-revision": "Firmware", "application-software-version": "Application", "protocol-version": "BACnet protocol version",
+  "protocol-revision": "BACnet protocol revision", location: "Location", description: "Description", "system-status": "System status",
+  "max-apdu-length-accepted": "Max APDU", "segmentation-supported": "Segmentation", "database-revision": "Database revision",
+  "local-date": "Device date", "local-time": "Device time", "utc-offset": "UTC offset", "serial-number": "Serial number" };
+const webUrlFor = (ip, p) => p === 443 ? `https://${ip}/` : p === 8080 ? `http://${ip}:8080/` : `http://${ip}/`;
+const devPorts = (x) => (x.ports || "").split(",").filter(Boolean).map(Number);
+function devStatus(x) {
+  if (x.pending) return { text: "On the imported list – not checked yet", cls: "muted" };
+  if (x.inactive) return { text: x.last_seen ? goneText(x.last_seen) : "Missing – on the list, never seen", cls: "gone" };
+  return { text: x.last_seen ? `Online – seen ${when(x.last_seen)}` : "Unknown", cls: "ok" };
+}
+
+async function renderDevicePage() {
+  const { id, net } = devSel();
+  let r;
+  try { r = await api(`/device/${id}?network_id=${net}`); }
+  catch (e) { flash(e.message, "warn"); state.selected = findNode(net) ? net : "home"; saveUi(); renderTree(); return refreshDetail(); }
+  if (!isDevSel() || devSel().id !== id) return;                 // moved on meanwhile
+  state.device = r; const d = r.device;
+  const title = devLabel(d);
+  const crumbs = crumbBar({ crumbs: r.crumbs, id: state.selected, name: title, kind: "device" });
+  const web = devPorts(d).find((p) => [443, 80, 8080].includes(p));
+  setHead(crumbs, title, [
+    web ? el("a", { class: "btn", href: webUrlFor(d.ip, web), target: "_blank", rel: "noopener noreferrer", title: `Open ${webUrlFor(d.ip, web)}` }, "Web UI ↗") : null,
+    el("button", { type: "button", class: "btn", onclick: () => { state.devTab = "ping"; renderDeviceTabs(); if (!state.ping || !state.ping.running) startPing(); } }, "Ping"),
+  ]);
+  const st = devStatus(d);
+  const tile = (k, v, from) => el("div", { class: "tile" }, el("span", { class: "k" }, k), el("span", { class: "v" }, v), from ? el("span", { class: "from" }, from) : null);
+  $("#detail").replaceChildren(el("div", { class: "tiles" },
+    tile("IP", d.ip, d.route ? `behind router · ${d.route}` : null),
+    tile("MAC", d.mac || "—", d.mac_vendor || null),
+    d.bacnet_instance != null ? tile("BACnet", `#${d.bacnet_instance}`, d.vendor || null) : tile("Vendor", d.vendor || d.mac_vendor || "—"),
+    d.model ? tile("Model", d.model) : null,
+    tile("Status", el("span", { class: st.cls }, d.inactive ? "Missing" : d.pending ? "Not checked" : "Online"),
+      d.inactive ? (d.last_seen ? `last seen ${when(d.last_seen)}` : "never seen") : d.pending ? "on the imported list" : d.last_seen ? `seen ${when(d.last_seen)}` : null)));
+  renderDeviceTabs();
+}
+
+function renderDeviceTabs() {
+  const r = state.device; if (!r) return;
+  const d = r.device;
+  const tabs = [["overview", "Overview"], ["ping", "Ping"], ...(d.bacnet_instance != null ? [["bacnet", "BACnet"]] : []), ["ports", "Ports"]];
+  if (!tabs.some(([k]) => k === state.devTab)) state.devTab = "overview";
+  const bar = el("div", { class: "tabs", role: "tablist", "aria-label": "Device" }, tabs.map(([k, label]) =>
+    el("button", { type: "button", role: "tab", class: "tab", id: `tab-${k}`, "aria-selected": String(state.devTab === k), "aria-controls": "devPanel",
+      onclick: () => { state.devTab = k; renderDeviceTabs(); } }, label,
+      k === "ping" && state.ping && state.ping.running ? el("span", { class: "live-dot", title: "Pinging" }) : null)));
+  const panel = el("div", { class: "tab-panel", id: "devPanel", role: "tabpanel", "aria-labelledby": `tab-${state.devTab}` });
+  $("#deviceView").replaceChildren(bar, panel);
+  ({ overview: renderOverviewTab, ping: renderPingTab, bacnet: renderBacnetTab, ports: renderPortsTab })[state.devTab](panel, r);
+}
+
+function renderOverviewTab(panel, r) {
+  const d = r.device; const st = devStatus(d);
+  const kv = (k, v) => v == null || v === "" ? [] : [el("dt", {}, k), el("dd", {}, v)];
+  const netLinks = r.networks.map((n, i) => [i ? " / " : null, el("button", { type: "button", class: "netlink", onclick: () => goTo(n.id) }, n.path)]).flat();
+  const notes = el("textarea", { rows: 4, placeholder: "Anything worth knowing next time – where it is, quirks, passwords to ask for…", "aria-label": "Notes" });
+  notes.value = d.notes || "";
+  const save = el("button", { type: "button", class: "btn small", disabled: true, onclick: async (e) => {
+    await withBusy(e.currentTarget, async () => { await api(`/device/${d.id}/notes`, { method: "PUT", body: { notes: notes.value } }); d.notes = notes.value.trim(); flash("Notes saved"); });
+    save.disabled = true; } }, "Save notes");
+  notes.addEventListener("input", () => { save.disabled = notes.value.trim() === (d.notes || ""); });
+  panel.append(el("div", { class: "ov-grid" },
+    el("dl", { class: "kv" },
+      ...kv("Status", el("span", { class: st.cls }, st.text)),
+      ...kv("Found by", (d.sources || "").split(",").filter((s) => s && s !== "self").join(" · ") || null),
+      ...kv("Response", d.ping_ms != null ? `${d.ping_ms} ms (last scan)` : null),
+      ...kv("First seen", d.first_seen ? when(d.first_seen) : null),
+      ...kv("Last seen", d.last_seen ? when(d.last_seen) : null),
+      ...kv("Network", netLinks.length ? netLinks : d.subnet),
+      ...kv("Behind router", d.route ? `${d.ip} · ${d.route}` : null),
+      ...kv("Firmware", d.firmware ? `${d.firmware}${d.app_version ? ` · app ${d.app_version}` : ""}` : null),
+      ...kv("On imported list", d.expected ? "Yes" : null),
+      ...kv("Also seen at", r.also_seen.length ? r.also_seen.map((a, i) => [i ? ", " : null,
+        a.network_id ? el("button", { type: "button", class: "netlink", onclick: () => openDevice(a.id, a.network_id) }, `${a.ip} (${a.network})`) : `${a.ip} (${a.network})`]).flat() : null)),
+    el("div", { class: "notes-box" }, el("label", { class: "small muted" }, "Notes"), notes, el("div", { class: "row" }, el("div", { class: "spacer" }), save))));
+}
+
+// ---- live ping: runs while this device's page is open (stops when you leave, or the window is hidden a while)
+function stopPing() {
+  const p = state.ping; if (!p) return;
+  clearTimeout(p.timer); p.running = false;
+  if (p.session) api(`/ping/${p.session}/stop`, { method: "POST" }).catch(() => {});
+  state.ping = null;
+}
+async function startPing() {
+  stopPing();
+  const d = state.device && state.device.device; if (!d) return;
+  const p = state.ping = { deviceId: d.id, ip: d.ip, session: null, results: [], running: true, timer: null, beep: !!state.pingBeep, down: false, events: [] };
+  try { p.session = (await api("/ping", { method: "POST", body: { device_id: d.id } })).session; }
+  catch (e) { flash(e.message, "error"); state.ping = null; renderDeviceTabs(); return; }
+  renderDeviceTabs(); pollPing();
+}
+async function pollPing() {
+  const p = state.ping; if (!p || !p.running) return;
+  if (document.visibilityState === "visible") {
+    try {
+      const r = await api(`/ping/${p.session}?after=${p.results.length}`);
+      if (state.ping !== p) return;
+      for (const x of r.results) pingSample(p, x);
+      if (!r.running) { p.running = false; p.stopped = r.stopped; }
+    } catch (e) { p.running = false; p.stopped = "finished"; }
+    if (state.devTab === "ping") updatePingPanel(); else if (!p.running) renderDeviceTabs();
+  }
+  if (p.running) p.timer = setTimeout(pollPing, 1000);
+}
+// Two lost replies in a row = dropped out; the first reply after that = back
+function pingSample(p, x) {
+  p.results.push(x);
+  const n = p.results.length;
+  if (!p.down && x.ms == null && n >= 2 && p.results[n - 2].ms == null) {
+    p.down = true; p.events.push({ t: p.results[n - 2].t, kind: "down" }); if (p.beep) beep(330);
+  } else if (p.down && x.ms != null) {
+    const since = p.events.length ? p.events[p.events.length - 1].t : x.t;
+    p.down = false; p.events.push({ t: x.t, kind: "up", after: Math.round((x.t - since) / 1000) }); if (p.beep) beep(880);
+  }
+}
+function beep(freq) {
+  try {
+    const ctx = state.audio || (state.audio = new (window.AudioContext || window.webkitAudioContext)());
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.value = freq; g.gain.value = 0.08; o.connect(g); g.connect(ctx.destination);
+    o.start(); o.stop(ctx.currentTime + 0.18);
+  } catch (e) {}
+}
+function renderPingTab(panel, r) {
+  const d = r.device; const p = state.ping && state.ping.deviceId === d.id ? state.ping : null;
+  const startStop = el("button", { type: "button", class: "btn " + (p && p.running ? "" : "btn-primary"), id: "pingBtn",
+    onclick: () => { if (state.ping && state.ping.running) { stopPing(); renderDeviceTabs(); } else startPing(); } }, p && p.running ? "Stop" : "Start ping");
+  const beepBox = el("label", { class: "check small" }, el("input", { type: "checkbox", checked: !!state.pingBeep,
+    onchange: (e) => { state.pingBeep = e.target.checked; if (state.ping) state.ping.beep = e.target.checked; if (e.target.checked) beep(660); } }),
+    " Beep when it drops out or comes back");
+  panel.append(
+    el("div", { class: "row ping-ctl" }, startStop, beepBox, el("div", { class: "spacer" }),
+      el("span", { class: "small muted" }, `Pings ${d.ip} every second${r.on_subnet ? "" : " (the laptop isn't on this subnet – replies come through the gateway, if at all)"}`)),
+    el("div", { id: "pingStats", class: "ping-stats" }),
+    el("div", { id: "pingChart", class: "ping-chart" }),
+    el("div", { id: "pingEvents", class: "ping-events" }));
+  updatePingPanel();
+}
+function updatePingPanel() {
+  const box = $("#pingStats"); if (!box) return;
+  const p = state.ping && state.device && state.ping.deviceId === state.device.device.id ? state.ping : null;
+  const btn = $("#pingBtn");
+  if (btn) { btn.textContent = p && p.running ? "Stop" : "Start ping"; btn.className = "btn " + (p && p.running ? "" : "btn-primary"); }
+  const tabDot = document.querySelector("#tab-ping .live-dot");
+  if (!!tabDot !== !!(p && p.running)) { renderDeviceTabs(); return; }
+  if (!p || !p.results.length) {
+    box.replaceChildren(el("p", { class: "muted" }, p && p.running ? "Starting…" : p && p.stopped ? `Stopped (${p.stopped}).` : "Not running."));
+    $("#pingChart").replaceChildren(); $("#pingEvents").replaceChildren(); return;
+  }
+  const res = p.results; const ok = res.filter((x) => x.ms != null).map((x) => x.ms);
+  const last = res[res.length - 1];
+  const lost = res.length - ok.length;
+  const stat = (k, v, cls) => el("div", { class: "pstat" }, el("span", { class: "k" }, k), el("span", { class: "v " + (cls || "") }, v));
+  const downFor = p.down && p.events.length ? Math.round((Date.now() - p.events[p.events.length - 1].t) / 1000) : 0;
+  box.replaceChildren(
+    stat("Now", p.down ? `Not replying (${downFor} s)` : last.ms == null ? "No reply" : "Replying", p.down || last.ms == null ? "gone" : "ok"),
+    stat("Last", last.ms == null ? "—" : `${last.ms} ms`),
+    stat("Min / avg / max", ok.length ? `${Math.min(...ok)} / ${(ok.reduce((a, b) => a + b, 0) / ok.length).toFixed(1)} / ${Math.max(...ok)} ms` : "—"),
+    stat("Sent", String(res.length)),
+    stat("Lost", `${lost} (${Math.round((lost / res.length) * 100)}%)`, lost ? "gone" : ""),
+    ...(p.running ? [] : [stat("State", `Stopped${p.stopped ? ` – ${p.stopped}` : ""}`)]));
+  // Last two minutes: one bar per ping, height = reply time; lost pings shown as a full-height marker
+  const win = res.slice(-120); const W = 600, H = 64; const max = Math.max(5, ...win.map((x) => x.ms || 0)); const bw = W / 120;
+  const ns = "http://www.w3.org/2000/svg"; const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("preserveAspectRatio", "none"); svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", `Reply times for the last ${win.length} pings, up to ${max} ms`);
+  win.forEach((x, i) => {
+    const r = document.createElementNS(ns, "rect"); const xpos = (120 - win.length + i) * bw;
+    const h = x.ms == null ? H : Math.max(2, (x.ms / max) * (H - 4));
+    r.setAttribute("x", (xpos + 0.5).toFixed(1)); r.setAttribute("width", Math.max(1, bw - 1).toFixed(1));
+    r.setAttribute("y", (H - h).toFixed(1)); r.setAttribute("height", h.toFixed(1)); r.setAttribute("rx", "1");
+    r.setAttribute("class", x.ms == null ? "lost" : "rtt");
+    const t = document.createElementNS(ns, "title"); t.textContent = `${new Date(x.t).toLocaleTimeString()} – ${x.ms == null ? "no reply" : x.ms + " ms"}`; r.append(t);
+    svg.append(r);
+  });
+  $("#pingChart").replaceChildren(svg, el("div", { class: "small muted chart-cap" }, el("span", {}, "Last 2 minutes"), el("span", {}, `scale 0–${max} ms · red = no reply`)));
+  $("#pingEvents").replaceChildren(...(p.events.length ? [el("h3", {}, "Drop-outs")] : []), ...p.events.slice(-12).reverse().map((e) =>
+    el("div", { class: "pev " + e.kind }, el("span", { class: "mono" }, new Date(e.t).toLocaleTimeString()),
+      e.kind === "down" ? " Stopped replying" : ` Replying again (down ${e.after} s)`)));
+}
+
+// ---- BACnet device properties (read when the tab is opened; nothing is written)
+function renderBacnetTab(panel, r) {
+  const d = r.device; const cached = state.devProps[d.id];
+  const read = el("button", { type: "button", class: "btn small", onclick: (e) => readDeviceProps(e.currentTarget) }, cached ? "Read again" : "Read properties");
+  panel.append(el("div", { class: "row" }, el("span", { class: "small muted" },
+    `Device #${d.bacnet_instance} at ${d.ip}${d.route ? ` (${d.route})` : ""}` + (cached ? ` · read ${when(cached.read_at)}` : "")),
+    el("div", { class: "spacer" }), read), el("div", { id: "bacProps" }));
+  if (!r.on_subnet) {
+    $("#bacProps").replaceChildren(el("p", { class: "muted" }, `The laptop isn't on ${d.subnet}. `,
+      r.network ? el("button", { type: "button", class: "netlink", onclick: () => goTo(r.network.id) }, `Join ${r.network.name}`) : null, " to read from this device."));
+    read.disabled = true; return;
+  }
+  if (cached) showDeviceProps(cached); else readDeviceProps(read);
+}
+async function readDeviceProps(btn) {
+  const d = state.device.device; const box = $("#bacProps");
+  if (box) box.replaceChildren(el("p", { class: "muted" }, "Reading…"));
+  await withBusy(btn, async () => {
+    const r = await api(`/device/${d.id}/bacnet`, { method: "POST" });
+    state.devProps[d.id] = r;
+    if (state.device && state.device.device.id === d.id && state.devTab === "bacnet") { renderDeviceTabs(); }
+  });
+  if (!state.devProps[d.id] && box) box.replaceChildren(el("p", { class: "gone" }, "No answer – see the Activity log."));
+}
+function showDeviceProps(p) {
+  const box = $("#bacProps"); if (!box) return;
+  const c = p.clock;
+  const clock = c ? el("p", { class: Math.abs(c.diff_s) > 120 ? "pending-note" : "small muted" },
+    Math.abs(c.diff_s) <= 120 ? `Device clock matches this laptop (${c.diff_s >= 0 ? "+" : ""}${c.diff_s} s).`
+      : `Device clock is ${fmtDur(Math.abs(c.diff_s))} ${c.diff_s > 0 ? "ahead of" : "behind"} this laptop (device ${c.device}, laptop ${c.laptop}).`) : null;
+  box.replaceChildren(...(clock ? [clock] : []), el("table", { class: "props" }, el("tbody", {}, p.rows.map((x) => el("tr", {},
+    el("th", { scope: "row" }, PROP_LABEL[x.prop] || x.prop),
+    el("td", { class: x.value == null ? "muted" : null }, x.value == null ? `— (${x.note})` : x.value))))));
+}
+function fmtDur(s) { const m = Math.floor(s / 60), r = s % 60; return m ? `${m} min${r ? ` ${r} s` : ""}` : `${r} s`; }
+
+// ---- ports
+function renderPortsTab(panel, r) {
+  const d = r.device; const ports = devPorts(d);
+  const kind = { 80: "web page", 443: "web page (secure)", 8080: "web page", 502: "Modbus TCP", 1911: "Niagara Fox (Workbench)", 4911: "Niagara Fox TLS (Workbench)", 22: "SSH", 23: "Telnet" };
+  const copy = (text) => el("button", { type: "button", class: "btn small", onclick: () => { navigator.clipboard && navigator.clipboard.writeText(text); flash(`Copied: ${text}`); } }, "Copy");
+  const rows = ports.map((p) => el("tr", {}, el("td", { class: "mono" }, String(p)), el("td", {}, portLabel[p] || p), el("td", {}, kind[p] || ""),
+    el("td", {}, [80, 443, 8080].includes(p) ? el("a", { href: webUrlFor(d.ip, p), target: "_blank", rel: "noopener noreferrer" }, `${webUrlFor(d.ip, p)} ↗`)
+      : p === 22 ? [el("span", { class: "mono" }, `ssh ${d.ip}`), " ", copy(`ssh ${d.ip}`)]
+      : p === 23 ? [el("span", { class: "mono" }, `telnet ${d.ip}`), " ", copy(`telnet ${d.ip}`)]
+      : el("span", { class: "mono" }, `${d.ip}:${p}`))));
+  panel.append(el("div", { class: "row" }, el("span", { class: "small muted" }, "Checks the common BMS ports: 80, 443, 8080, 502, 1911, 4911, 22, 23."),
+    el("div", { class: "spacer" }),
+    el("button", { type: "button", class: "btn small", disabled: !r.on_subnet, title: r.on_subnet ? null : "Join this network first",
+      onclick: (e) => withBusy(e.currentTarget, async () => { const res = await api(`/device/${d.id}/ports`, { method: "POST" });
+        d.ports = res.ports.join(","); flash(`${res.ports.length} open port(s)`); renderDevicePage(); }) }, "Check ports now")),
+    ports.length ? el("table", { class: "props" }, el("tbody", {}, rows)) : el("p", { class: "muted" }, "No open ports found (or not checked yet)."));
+}
+
 // ---------- page head: crumbs, title and page buttons live in the top bar ----------
 function setHead(crumbs, title, actions) {
   $("#tbCrumbs").replaceChildren(crumbs);       // the last crumb is the page title
@@ -372,6 +670,13 @@ if (window.ResizeObserver) new ResizeObserver(() => fitCrumbs()).observe($("#tbC
 // ---------- detail ----------
 async function refreshDetail() {
   const box = $("#detail");
+  if (!isDevSel() || (state.ping && state.ping.deviceId !== devSel().id)) stopPing();
+  if (isDevSel()) {
+    document.body.classList.remove("at-home"); document.body.classList.add("at-device");
+    state.detail = null;
+    await renderDevicePage(); return;
+  }
+  document.body.classList.remove("at-device");
   if (state.selected === "home" || state.selected == null || !findNode(state.selected)) {
     state.selected = "home"; state.detail = null;
     document.body.classList.add("at-home");
@@ -460,7 +765,11 @@ async function joinNetwork(id, ip, btn) {
   else await refreshDetail();
 }
 
-function goTo(id) { if (id === "home") return showHome(); const n = findNode(id); if (n) select(n); }
+function goTo(id) {
+  if (id === "home") return showHome();
+  if (typeof id === "string" && id.startsWith("dev:")) { const [, d, net] = id.split(":"); return openDevice(Number(d), Number(net)); }
+  const n = findNode(id); if (n) select(n);
+}
 async function showHome() { state.selected = "home"; saveUi(); renderTree(); await refreshDetail(); }
 
 // ---------- Breadcrumbs: Home › Site ▾ › Area ▾ › Network ›▾ (Explorer style) ----------
@@ -797,6 +1106,7 @@ async function refreshDevices() {
   let r; try { r = await api(`/devices?node_id=${d.id}`); } catch (e) { return; }
   if (!state.detail || state.detail.id !== r.node_id) return;      // the user moved on meanwhile
   state.devData = r; state.devices = r.devices;
+  if (d.kind === "network" && state.netDevices[d.id] !== undefined) { state.netDevices[d.id] = r.devices; renderTree(); }
   $("#devTitle").textContent = d.kind === "network" ? "Devices on this network" : `Devices in this ${d.kind}`;
   $("#lastScan").textContent = r.last_scan ? `Last: ${r.last_scan.kind}, ${when(r.last_scan.ts)}` : "";
   fillDeviceFilters(r);
@@ -929,7 +1239,10 @@ function renderDevices() {
         el("span", { class: "sub2" }, [x.ping_ms != null ? `${x.ping_ms} ms` : null, when(x.last_seen)].filter(Boolean).join(" · "))];
     return el("tr", { class: [x.is_self ? "self" : "", x.inactive ? "inactive" : "", x.pending ? "pending" : ""].join(" ").trim() || null,
         title: x.inactive ? goneText(x.last_seen) : null },
-      el("td", { class: "mono ipcell", "data-label": "IP" }, x.ip, x.new ? el("span", { class: "badge-new" }, "NEW") : null,
+      el("td", { class: "mono ipcell", "data-label": "IP" },
+        x.is_self ? x.ip : el("button", { type: "button", class: "devlink", title: `Open ${devLabel(x)}`,
+          onclick: () => openDevice(x.id, (x.network_ids && x.network_ids[0]) || d.id) }, x.ip),
+        x.new ? el("span", { class: "badge-new" }, "NEW") : null,
         x.expected ? el("span", { class: "badge-list", title: "On the imported device list" }, "LIST") : null),
       el("td", { class: "mono", "data-label": "MAC" }, x.mac || "—"),
       el("td", { "data-label": "Vendor" }, x.is_self ? [el("strong", {}, "This PC"), x.name ? el("span", { class: "sub2" }, x.name) : null] : vendorCell(x)),
@@ -1485,7 +1798,7 @@ $("#checkInetBtn").addEventListener("click", (e) => withBusy(e.currentTarget, as
   const r = await api("/internet", { method: "POST" });
   if (r.internet === 2) flash(r.detail, "warn"); else flash(`Internet check: ${inetInfo(r.internet).text}`);
   await refreshStatus(); }));
-$("#search").addEventListener("input", renderTree);
+$("#search").addEventListener("input", () => { renderTree(); searchDevicesSoon(); });
 $("#newSiteBtn").addEventListener("click", () => { $("#addMenu").open = false; openNode({ kind: "site" }); });
 $("#importSiteFile").addEventListener("change", async (e) => {
   const file = e.target.files[0]; $("#addMenu").open = false; if (file) await importFromFile(file); e.target.value = "";

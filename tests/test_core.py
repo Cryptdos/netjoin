@@ -349,6 +349,49 @@ class StoreAndJoin(unittest.TestCase):
         r = self.store.devices_for_node(self.area["id"])
         self.assertEqual(r["devices"][0]["network_links"][0]["path"], "FCU")
 
+    def test_device_page_store(self):
+        sn = self.net["subnet"]
+        self.store.upsert_device(sn, "10.20.5.11", "10.20.5.11", "arp", mac="AA-BB-CC-00-00-01", name="RA L2-01", bacnet_instance=2502)
+        self.store.upsert_device("10.20.6.0/24", "10.20.6.40", "10.20.6.40", "arp", mac="AA-BB-CC-00-00-01")
+        d = next(x for x in self.store.devices(sn) if x["ip"] == "10.20.5.11")
+        one = self.store.device(d["id"])
+        self.assertEqual((one["ip"], one["inactive"]), ("10.20.5.11", False))
+        self.store.set_device_notes(d["id"], "  by the lift  ")
+        self.store.set_device_props(d["id"], "FW=1.2", "App 3", model="DXR2")
+        one = self.store.device(d["id"])
+        self.assertEqual((one["notes"], one["firmware"], one["app_version"], one["model"]), ("by the lift", "FW=1.2", "App 3", "DXR2"))
+        self.assertEqual([r["ip"] for r in self.store.also_seen(one)], ["10.20.6.40"])
+        hits = self.store.search_devices("2502")
+        self.assertEqual([(h["ip"], h["network_ids"]) for h in hits], [("10.20.5.11", [self.net["id"]])])
+        self.assertEqual(self.store.search_devices("l2-01")[0]["ip"], "10.20.5.11")
+        self.assertEqual(self.store.search_devices("x"), [])                       # too short
+
+    def test_device_tools(self):
+        import time
+        from netjoin.scan.devtools import DeviceTools, DeviceToolError
+        from netjoin.scan.probes import FakeProber
+        tools = DeviceTools(self.engine, FakeProber())
+        sn = self.net["subnet"]
+        self.store.upsert_device(sn, "10.20.5.11", "10.20.5.11", "bacnet", bacnet_instance=2502)
+        did = next(x for x in self.store.devices(sn) if x["ip"] == "10.20.5.11")["id"]
+        with self.assertRaises(DeviceToolError):           # not on the subnet yet
+            tools.bacnet_properties(did)
+        self.engine.join(self.net["id"])
+        r = tools.bacnet_properties(did)
+        rows = {x["prop"]: x["value"] for x in r["rows"]}
+        self.assertEqual((rows["firmware-revision"], rows["system-status"], rows["segmentation-supported"]),
+                         ("FW=02.20.010", "operational", "none"))
+        self.assertEqual(self.store.device(did)["firmware"], "FW=02.20.010")
+        s = tools.ping_start(did)
+        self.assertEqual(tools.ping_start(did)["session"], s["session"])     # same device → same ping
+        time.sleep(2.3)
+        got = tools.ping_poll(s["session"])
+        self.assertGreaterEqual(got["count"], 2)
+        self.assertTrue(got["running"])
+        tools.ping_stop(s["session"])
+        with self.assertRaises(DeviceToolError):
+            tools.ping_poll(s["session"])
+
     def test_inactive_devices(self):
         from netjoin.scan import ScanManager
         from netjoin.scan.probes import FakeProber

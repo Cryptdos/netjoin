@@ -17,10 +17,12 @@ from . import APP_NAME, __version__, paths
 from .engine import Engine, JoinError
 from .scan import ScanError, ScanManager
 from .scan import npcap as npcap_mod
+from .scan.devtools import DeviceToolError, DeviceTools
 from .store import ImportConflict, StoreError
 
 ENGINE: Engine | None = None
 SCANS: ScanManager | None = None
+DEVTOOLS: DeviceTools | None = None
 PORT = 8765
 
 
@@ -64,7 +66,7 @@ def api(fn):
             result = await run_in_threadpool(fn, request, data)
         except ImportConflict as e:
             return JSONResponse({"error": str(e), "conflicts": e.names}, status_code=409)
-        except (StoreError, JoinError, ScanError) as e:
+        except (StoreError, JoinError, ScanError, DeviceToolError) as e:
             return JSONResponse({"error": str(e)}, status_code=400)
         if isinstance(result, Response):
             return result
@@ -252,6 +254,55 @@ def clear_devices(req, data):
     return {"cleared": n}
 
 
+# ---------- device pages (read-only tools)
+def device_detail(req, data):
+    st = eng().store
+    did = int(req.path_params["id"])
+    d = st.device(did)
+    if not d:
+        raise StoreError("That device is no longer in the list")
+    nets = st.networks_for_subnet(d["subnet"])
+    want = req.query_params.get("network_id")
+    net = next((n for n in nets if want and n["id"] == int(want)), nets[0] if nets else None)
+    also = []
+    for r in st.also_seen(d):
+        ns = st.networks_for_subnet(r["subnet"])
+        also.append({**r, "network_id": ns[0]["id"] if ns else None, "network": " › ".join(st.path_names(ns[0]["id"])) if ns else r["subnet"]})
+    return {"device": d, "network": {"id": net["id"], "name": net["name"], "subnet": net["subnet"]} if net else None,
+            "crumbs": [{"id": a["id"], "name": a["name"], "kind": a["kind"]} for a in reversed(st.ancestors(net["id"]))] if net else [],
+            "networks": [{"id": n["id"], "path": " › ".join(st.path_names(n["id"]))} for n in nets],
+            "also_seen": also, "on_subnet": DEVTOOLS.on_subnet(d)}
+
+
+def device_notes(req, data):
+    eng().store.set_device_notes(int(req.path_params["id"]), str(data.get("notes") or ""))
+    return {"ok": True}
+
+
+def device_props(req, data):
+    return DEVTOOLS.bacnet_properties(int(req.path_params["id"]))
+
+
+def device_ports(req, data):
+    return DEVTOOLS.check_ports(int(req.path_params["id"]))
+
+
+def device_search(req, data):
+    return eng().store.search_devices(req.query_params.get("q", ""))
+
+
+def ping_start(req, data):
+    return DEVTOOLS.ping_start(int(data.get("device_id", 0)))
+
+
+def ping_poll(req, data):
+    return DEVTOOLS.ping_poll(int(req.path_params["sid"]), int(req.query_params.get("after", 0)))
+
+
+def ping_stop(req, data):
+    return DEVTOOLS.ping_stop(int(req.path_params["sid"]))
+
+
 def import_devices(req, data):
     nid = int(req.query_params.get("node_id", 0))
     r = eng().store.import_device_list(nid, str(data.get("csv") or ""))
@@ -345,8 +396,9 @@ async def index(request):
 
 
 def build_app(engine: Engine, port: int, scans: ScanManager) -> Starlette:
-    global ENGINE, PORT, SCANS
+    global ENGINE, PORT, SCANS, DEVTOOLS
     ENGINE, PORT, SCANS = engine, port, scans
+    DEVTOOLS = DeviceTools(engine, scans.prober)
     routes = [
         Route("/", index),
         Route("/api/ping", api(ping)),
@@ -364,6 +416,14 @@ def build_app(engine: Engine, port: int, scans: ScanManager) -> Starlette:
         Route("/api/rejoin", api(rejoin), methods=["POST"]),
         Route("/api/history", api(history)),
         Route("/api/devices/import", api(import_devices), methods=["POST"]),
+        Route("/api/devices/search", api(device_search)),
+        Route("/api/device/{id:int}", api(device_detail)),
+        Route("/api/device/{id:int}/notes", api(device_notes), methods=["PUT"]),
+        Route("/api/device/{id:int}/bacnet", api(device_props), methods=["POST"]),
+        Route("/api/device/{id:int}/ports", api(device_ports), methods=["POST"]),
+        Route("/api/ping", api(ping_start), methods=["POST"]),
+        Route("/api/ping/{sid:int}", api(ping_poll)),
+        Route("/api/ping/{sid:int}/stop", api(ping_stop), methods=["POST"]),
         Route("/api/devices/expected", api(clear_expected), methods=["DELETE"]),
         Route("/api/apply-changes", api(apply_changes), methods=["POST"]),
         Route("/api/internet", api(internet), methods=["POST"]),

@@ -67,6 +67,10 @@ CREATE TABLE IF NOT EXISTS devices(
     last_seen TEXT,
     expected INTEGER NOT NULL DEFAULT 0,   -- on an imported device list: should be there
     expected_since TEXT,
+    notes TEXT,                    -- the engineer's notes (like a network's)
+    firmware TEXT,                 -- from BACnet device properties, when read
+    app_version TEXT,
+    props_ts TEXT,
     UNIQUE(subnet, key)
 );
 CREATE INDEX IF NOT EXISTS devices_subnet ON devices(subnet);
@@ -120,6 +124,9 @@ class Store:
         if "expected" not in cols:     # v0.9.1: imported device lists
             self.db.execute("ALTER TABLE devices ADD COLUMN expected INTEGER NOT NULL DEFAULT 0")
             self.db.execute("ALTER TABLE devices ADD COLUMN expected_since TEXT")
+        for col in ("notes", "firmware", "app_version", "props_ts"):     # v0.10: device pages
+            if col not in cols:
+                self.db.execute(f"ALTER TABLE devices ADD COLUMN {col} TEXT")
         ncols = {r["name"] for r in self.db.execute("PRAGMA table_info(nodes)")}
         for col, ddl in (("addr_mode", "TEXT NOT NULL DEFAULT 'range'"), ("fixed_ip", "TEXT"),
                          ("alloc", "TEXT NOT NULL DEFAULT 'first'")):
@@ -617,6 +624,62 @@ class Store:
             self.db.commit()
         return n
 
+    # ---------- single devices (device pages) ----------
+    def device(self, device_id: int) -> dict | None:
+        """One device with its status flags worked out (inactive / pending / new)."""
+        row = self.db.execute("SELECT subnet FROM devices WHERE id=?", (device_id,)).fetchone()
+        if not row:
+            return None
+        return next((d for d in self.devices(row["subnet"]) if d["id"] == device_id), None)
+
+    def networks_for_subnet(self, subnet: str) -> list[dict]:
+        return [dict(r) for r in self.db.execute("SELECT * FROM nodes WHERE kind='network' AND subnet=? ORDER BY id", (subnet,))]
+
+    def set_device_notes(self, device_id: int, notes: str) -> None:
+        with self._lock:
+            self.db.execute("UPDATE devices SET notes=? WHERE id=?", ((notes or "").strip() or None, device_id))
+            self.db.commit()
+
+    def set_device_props(self, device_id: int, firmware: str | None, app_version: str | None, **more) -> None:
+        """Remember what a BACnet read said (firmware for health checks); fill blank name / model / vendor."""
+        with self._lock:
+            row = self.db.execute("SELECT * FROM devices WHERE id=?", (device_id,)).fetchone()
+            if not row:
+                return
+            upd = {"firmware": firmware, "app_version": app_version, "props_ts": now()}
+            for k in ("name", "model", "vendor"):
+                if more.get(k) and not row[k]:
+                    upd[k] = more[k]
+            self.db.execute(f"UPDATE devices SET {','.join(f'{k}=?' for k in upd)} WHERE id=?", (*upd.values(), device_id))
+            self.db.commit()
+
+    def also_seen(self, device: dict) -> list[dict]:
+        """Other rows with the same MAC (the device turned up at another address or on another subnet)."""
+        if not device.get("mac") or device.get("route"):
+            return []
+        return [dict(r) for r in self.db.execute(
+            "SELECT id, subnet, ip, last_seen FROM devices WHERE mac=? AND id<>? ORDER BY last_seen DESC", (device["mac"], device["id"]))]
+
+    def search_devices(self, q: str, limit: int = 60) -> list[dict]:
+        """Devices anywhere matching IP, name, MAC, model or BACnet instance – for the Sites search."""
+        q = (q or "").strip().lower()
+        if len(q) < 2:
+            return []
+        like = f"%{q.lstrip('#')}%"
+        rows = [dict(r) for r in self.db.execute(
+            "SELECT id, subnet, ip, mac, name, model, vendor, mac_vendor, bacnet_instance, sources FROM devices "
+            "WHERE lower(ip) LIKE ? OR lower(coalesce(name,'')) LIKE ? OR lower(coalesce(mac,'')) LIKE ? "
+            "OR lower(coalesce(model,'')) LIKE ? OR cast(bacnet_instance AS TEXT) LIKE ? LIMIT ?",
+            (like, like, like, like, like, limit))]
+        out = []
+        for r in rows:
+            if "self" in (r["sources"] or "").split(","):
+                continue
+            nets = self.networks_for_subnet(r["subnet"])
+            if nets:
+                out.append({**r, "network_ids": [n["id"] for n in nets]})
+        return out
+
     def networks_under(self, node_id: int) -> list[dict]:
         """Every network at or below a node (a network gives just itself)."""
         node = self.node(node_id)
@@ -778,7 +841,8 @@ class Store:
     EXPORT_FIELDS = ("kind", "name", "subnet", "range_start", "range_end", "gw_override", "gateway",
                      "dns_override", "dns", "notes", "addr_mode", "fixed_ip", "alloc")
     DEVICE_FIELDS = ("key", "ip", "mac", "ping_ms", "bacnet_instance", "bacnet_vendor_id", "vendor", "mac_vendor",
-                     "name", "model", "route", "ports", "sources", "first_seen", "last_seen", "expected", "expected_since")
+                     "name", "model", "route", "ports", "sources", "first_seen", "last_seen", "expected", "expected_since",
+                     "notes", "firmware", "app_version", "props_ts")
 
     def export(self, node_id: int | None = None, include_devices: bool = False) -> dict:
         """Format 2. node_id = one site (plan item 1); None = everything."""
