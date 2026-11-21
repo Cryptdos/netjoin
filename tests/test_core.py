@@ -303,6 +303,52 @@ class StoreAndJoin(unittest.TestCase):
                 return
             time.sleep(0.03)
 
+    def test_import_device_list(self):
+        import time
+        from netjoin.store import now
+        sn = self.net["subnet"]                                   # 10.20.5.0/24
+        self.store.upsert_device(sn, "10.20.5.11", "10.20.5.11", "arp", mac="AA-BB", name="Scanned name")
+        self.store.record_scan(sn, now(), "Quick scan", ["arp"])
+        time.sleep(0.01)
+        csv_text = ("\ufeffIP Address;Name;BACnet Instance;MAC\n"
+                    "10.20.5.11;FCU-01;2011;\n"                # known: flagged, scanned name kept, instance filled
+                    "10.20.5.12;FCU-02;#2012;aa:bb:cc:dd:ee:ff\n"  # new, never seen
+                    "10.99.0.1;Elsewhere;;\n"                  # not on any network here
+                    "nonsense;Bad;;\n"
+                    "10.20.5.12;Dup;;\n")
+        site = self.store.tree()[0]["id"]
+        r = self.store.import_device_list(site, csv_text)
+        self.assertEqual((r["added"], r["updated"]), (1, 1))
+        self.assertEqual([s["why"] for s in r["skipped"]], ["not on any network here", "not a valid IP address", "listed twice"])
+        rows = {d["ip"]: d for d in self.store.devices(sn)}
+        self.assertEqual((rows["10.20.5.11"]["name"], rows["10.20.5.11"]["bacnet_instance"], rows["10.20.5.11"]["expected"]),
+                         ("Scanned name", 2011, True))
+        new = rows["10.20.5.12"]
+        self.assertEqual((new["bacnet_instance"], new["mac"], new["pending"], new["inactive"]), (2012, "AA-BB-CC-DD-EE-FF", True, False))
+        # A scan after the import that doesn't find .12 → missing; .11 found → fine
+        time.sleep(0.01)
+        started = now()
+        self.store.upsert_device(sn, "10.20.5.11", "10.20.5.11", "arp")
+        self.store.record_scan(sn, started, "Quick scan", ["arp"])
+        rows = {d["ip"]: d for d in self.store.devices(sn)}
+        self.assertEqual((rows["10.20.5.12"]["inactive"], rows["10.20.5.12"]["pending"]), (True, False))
+        self.assertFalse(rows["10.20.5.11"]["inactive"])
+        # Clear inactive keeps the list; clearing the list removes never-seen rows and unflags the rest
+        self.assertEqual(self.store.clear_inactive([sn]), 0)
+        self.store.clear_expected([sn])
+        rows = {d["ip"]: d for d in self.store.devices(sn)}
+        self.assertEqual((sorted(rows), rows["10.20.5.11"]["expected"]), (["10.20.5.11"], False))
+        with self.assertRaises(StoreError):
+            self.store.import_device_list(site, "Name,MAC\nx,y\n")    # no IP column
+
+    def test_rollup_network_paths(self):
+        site = self.store.tree()[0]["id"]
+        self.store.upsert_device(self.net["subnet"], "10.20.5.11", "10.20.5.11", "arp")
+        r = self.store.devices_for_node(site)
+        self.assertEqual(r["devices"][0]["network_links"], [{"id": self.net["id"], "path": "Area › FCU"}])
+        r = self.store.devices_for_node(self.area["id"])
+        self.assertEqual(r["devices"][0]["network_links"][0]["path"], "FCU")
+
     def test_inactive_devices(self):
         from netjoin.scan import ScanManager
         from netjoin.scan.probes import FakeProber

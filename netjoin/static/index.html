@@ -100,13 +100,22 @@
             <button type="button" class="chip" data-filter="web" aria-pressed="false" title="Has a web page (HTTP / HTTPS open)">Web UI</button>
             <button type="button" class="chip" data-filter="missing" aria-pressed="false" title="Didn't answer the latest scan that could have found it">Missing</button>
             <button type="button" class="chip" data-filter="new" aria-pressed="false" title="First seen in the latest scan">New</button>
+            <button type="button" class="chip" data-filter="listed" aria-pressed="false" title="On an imported device list">On list</button>
           </div>
-          <select id="devVendor" aria-label="Filter by vendor"><option value="">All vendors</option></select>
+          <details class="menu vendor-menu" id="devVendor">
+            <summary class="btn small" aria-label="Filter by vendor"><span id="devVendorLabel">All vendors</span> ▾</summary>
+            <div class="menu-list vendor-list">
+              <div class="row vendor-acts"><button type="button" class="linkish" id="vendAll">Select all</button><button type="button" class="linkish" id="vendNone">Clear</button></div>
+              <div id="vendorChecks" role="group" aria-label="Vendors"></div>
+            </div>
+          </details>
           <select id="devNetwork" aria-label="Filter by network" hidden><option value="">All networks</option></select>
           <select id="devSort" aria-label="Sort devices" class="sort-narrow">
             <option value="ip">Sort: IP</option><option value="name">Sort: Name</option><option value="vendor">Sort: Vendor</option>
             <option value="bacnet">Sort: BACnet instance</option><option value="seen">Sort: Last seen</option><option value="network">Sort: Network</option>
           </select>
+          <button type="button" class="btn small" id="devCsvIn" title="Load a list of devices that should be here (CSV). A scan then shows which are online and which are missing.">Import CSV</button>
+          <input type="file" id="devCsvFile" accept=".csv,text/csv,.txt" hidden>
           <button type="button" class="btn small" id="devCsv" title="Download the devices shown as a CSV file">Export CSV</button>
         </div>
         <div class="progress" id="scanProgress" hidden>
@@ -118,6 +127,7 @@
           <div class="empty">Select a network.</div>
         </div>
         <div class="row small muted"><span id="devCount"></span><div class="spacer"></div>
+          <button type="button" class="btn small" id="clearExpected" hidden title="Forget the imported list: devices never seen are removed, the rest stay as ordinary devices">Remove imported list</button>
           <button type="button" class="btn small" id="clearInactive" hidden>Clear inactive</button>
           <button type="button" class="btn small" id="clearDevices" hidden>Clear list</button></div>
       </section>

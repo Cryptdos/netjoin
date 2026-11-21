@@ -287,7 +287,7 @@ function findNode(id, nodes = state.tree) {
 }
 
 async function select(n) {
-  if (state.selected !== n.id) { $("#devVendor").value = ""; $("#devNetwork").value = ""; }
+  if (state.selected !== n.id) { state.vendors.clear(); $("#devNetwork").value = ""; }
   state.selected = n.id; state.expanded.add(n.id); saveUi(); renderTree();
   await refreshDetail();
 }
@@ -354,10 +354,18 @@ function setHead(crumbs, title, actions) {
 function fitCrumbs() {
   const nav = $("#tbCrumbs .crumbs"); if (!nav) return;
   const groups = [...nav.querySelectorAll(":scope > .cgrp")]; const more = nav.querySelector(":scope > .crumb-more");
-  groups.forEach((g) => { g.hidden = false; }); more.hidden = true;
-  nav.classList.add("measuring");               // title at full width while deciding what to fold
-  for (let i = 0; i < groups.length - 1 && nav.scrollWidth > nav.clientWidth + 1; i++) { groups[i].hidden = true; more.hidden = false; }
-  nav.classList.remove("measuring");
+  const bar = $("#topbar"); bar.classList.remove("tight");     // try the one-line bar first
+  const fold = () => {
+    groups.forEach((g) => { g.hidden = false; }); more.hidden = true;
+    nav.classList.add("measuring");             // title at full width while deciding what to fold
+    for (let i = 0; i < groups.length - 1 && nav.scrollWidth > nav.clientWidth + 1; i++) { groups[i].hidden = true; more.hidden = false; }
+    nav.classList.remove("measuring");
+  };
+  fold();
+  // Still no room for the page title itself (lots of page buttons on a narrow screen)? Give the
+  // breadcrumbs their own row rather than cutting the title down to a couple of letters.
+  const here = nav.querySelector(".crumb-here");
+  if (here && here.scrollWidth > here.clientWidth + 1 && here.clientWidth < 160) { bar.classList.add("tight"); fold(); }
 }
 if (window.ResizeObserver) new ResizeObserver(() => fitCrumbs()).observe($("#tbCrumbs"));
 
@@ -807,11 +815,24 @@ function renderRollStats(r) {
   box.textContent = parts.join(" · ");
 }
 
+// Vendor filter: tick any number (e.g. "Siemens" and "Siemens Building Technologies"). None ticked = all.
+state.vendors = new Set();
+function vendorLabel() {
+  const n = state.vendors.size;
+  $("#devVendorLabel").textContent = !n ? "All vendors" : n === 1 ? [...state.vendors][0] : `${n} vendors`;
+  $("#devVendor").classList.toggle("active", n > 0);
+}
 function fillDeviceFilters(r) {
-  const vSel = $("#devVendor"), nSel = $("#devNetwork"); const keepV = vSel.value, keepN = nSel.value;
-  const vendors = [...new Set(r.devices.filter((x) => !x.is_self).map(vendorName).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-  vSel.replaceChildren(el("option", { value: "" }, "All vendors"), ...vendors.map((v) => el("option", { value: v }, v)));
-  vSel.value = vendors.includes(keepV) ? keepV : "";
+  const nSel = $("#devNetwork"); const keepN = nSel.value;
+  const counts = {};
+  for (const x of r.devices) if (!x.is_self) { const v = vendorName(x); if (v) counts[v] = (counts[v] || 0) + 1; }
+  const vendors = Object.keys(counts).sort((a, b) => a.localeCompare(b));
+  for (const v of [...state.vendors]) if (!counts[v]) state.vendors.delete(v);
+  $("#vendorChecks").replaceChildren(...(vendors.length ? vendors.map((v) => el("label", { class: "check vend" },
+    el("input", { type: "checkbox", value: v, checked: state.vendors.has(v),
+      onchange: (e) => { e.target.checked ? state.vendors.add(v) : state.vendors.delete(v); vendorLabel(); renderDevices(); } }),
+    el("span", { class: "vn" }, v), el("span", { class: "n" }, String(counts[v])))) : [el("p", { class: "small muted" }, "No vendors yet.")]));
+  vendorLabel();
   const rollup = state.detail && state.detail.kind !== "network";
   nSel.hidden = !rollup || r.networks.length < 2;
   const nets = [...new Set(r.devices.map((x) => x.network).filter(Boolean))].sort();
@@ -834,7 +855,7 @@ const hasWeb = (x) => (x.ports || "").split(",").some((p) => ["80", "443", "8080
 const ipKey = (ip) => String(ip).split(".").reduce((a, o) => a * 256 + (+o || 0), 0);
 const DEV_FILTERS = {
   all: () => true, bacnet: (x) => x.bacnet_instance != null, other: (x) => x.bacnet_instance == null,
-  web: hasWeb, missing: (x) => x.inactive, new: (x) => x.new,
+  web: hasWeb, missing: (x) => x.inactive, new: (x) => x.new, listed: (x) => x.expected,
 };
 // Sort keys: the first value decides; null = blank, always sorted last whichever direction.
 const DEV_SORTS = {
@@ -847,9 +868,9 @@ state.sort = { key: "ip", dir: 1 };
 const portLabel = { 80: "HTTP", 443: "HTTPS", 8080: "HTTP-alt", 502: "Modbus", 1911: "Fox", 4911: "Fox TLS", 22: "SSH", 23: "Telnet" };
 
 function visibleDevices() {
-  const q = $("#devSearch").value.trim().toLowerCase(); const v = $("#devVendor").value; const n = $("#devNetwork").value;
+  const q = $("#devSearch").value.trim().toLowerCase(); const vs = state.vendors; const n = $("#devNetwork").value;
   const f = DEV_FILTERS[state.filter] || DEV_FILTERS.all;
-  const rows = (state.devices || []).filter((x) => f(x) && (!v || vendorName(x) === v) && (!n || x.network === n) && (!q ||
+  const rows = (state.devices || []).filter((x) => f(x) && (!vs.size || vs.has(vendorName(x))) && (!n || x.network === n) && (!q ||
     [x.ip, x.mac, x.vendor, x.mac_vendor, x.name, x.model, x.route, x.network, x.bacnet_instance != null ? `#${x.bacnet_instance} ${x.bacnet_instance}` : ""]
       .some((t) => t && String(t).toLowerCase().includes(q))));
   const key = DEV_SORTS[state.sort.key] || DEV_SORTS.ip; const dir = state.sort.dir;
@@ -876,14 +897,22 @@ function renderDevices() {
   for (const c of document.querySelectorAll(".chip")) {
     const k = c.dataset.filter; const n = all.filter((x) => !x.is_self && DEV_FILTERS[k](x)).length;
     c.replaceChildren(c.dataset.label || (c.dataset.label = c.textContent), k === "all" || !n ? "" : el("span", { class: "n" }, String(n)));
-    if (k === "missing" || k === "new") c.hidden = n === 0 && state.filter !== k;
+    if (k === "missing" || k === "new" || k === "listed") c.hidden = n === 0 && state.filter !== k;
   }
   const inactive = all.filter((x) => x.inactive).length;
   $("#clearDevices").hidden = all.length === 0;
   $("#clearInactive").hidden = inactive === 0;
   $("#clearInactive").textContent = `Clear inactive (${inactive})`;
-  const others = all.filter((x) => !x.is_self).length;
-  $("#devCount").textContent = all.length ? `${others} device(s)${rows.filter((x) => !x.is_self).length !== others ? `, ${rows.filter((x) => !x.is_self).length} shown` : ""}` : "";
+  // Footer: "Showing 5 of 11 devices · 2 missing · 3 on the list not checked yet"
+  const devs = all.filter((x) => !x.is_self); const shown = rows.filter((x) => !x.is_self).length;
+  const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+  const missing = devs.filter((x) => x.inactive).length, pending = devs.filter((x) => x.pending).length, listed = devs.filter((x) => x.expected).length;
+  $("#devCount").replaceChildren(...(devs.length ? [
+    el("span", { class: "cnt" }, shown !== devs.length ? `Showing ${shown} of ${plural(devs.length, "device")}` : plural(devs.length, "device")),
+    missing ? el("span", { class: "cnt gone" }, `${missing} missing`) : null,
+    listed ? el("span", { class: "cnt" }, `${listed} on the imported list`) : null,
+    pending ? el("span", { class: "cnt" }, `${pending} not checked yet`) : null].filter(Boolean) : []));
+  $("#clearExpected").hidden = listed === 0;
   if (!all.length) {
     box.replaceChildren(el("div", { class: "empty" }, rollup ? "No scan results in this " + d.kind + " yet – open one of its networks, Join and Scan."
       : d.on_subnet ? "No scan results yet – use Scan to find hosts and controllers." : "No scan results yet. Join this network, then Scan."));
@@ -892,13 +921,16 @@ function renderDevices() {
   const webUrl = (ip, p) => p === 443 ? `https://${ip}/` : p === 8080 ? `http://${ip}:8080/` : `http://${ip}/`;
   const tr = (x) => {
     const ports = (x.ports || "").split(",").filter(Boolean).map(Number);
-    const seen = x.inactive
+    const seen = x.pending ? [el("span", { class: "muted" }, "On the list – not checked yet"), el("span", { class: "sub2" }, "Scan to check")]
+      : x.inactive && x.expected && !x.last_seen ? [el("span", { class: "gone" }, "Missing – on the list, never seen"), el("span", { class: "sub2" }, "imported list")]
+      : x.inactive
       ? [el("span", { class: "gone" }, goneText(x.last_seen)), el("span", { class: "sub2" }, (x.sources || "").split(",").filter((s) => s && s !== "self").join(" · "))]
       : [(x.sources || "").split(",").filter((s) => s && s !== "self").join(" · ") || "—",
         el("span", { class: "sub2" }, [x.ping_ms != null ? `${x.ping_ms} ms` : null, when(x.last_seen)].filter(Boolean).join(" · "))];
-    return el("tr", { class: [x.is_self ? "self" : "", x.inactive ? "inactive" : ""].join(" ").trim() || null,
+    return el("tr", { class: [x.is_self ? "self" : "", x.inactive ? "inactive" : "", x.pending ? "pending" : ""].join(" ").trim() || null,
         title: x.inactive ? goneText(x.last_seen) : null },
-      el("td", { class: "mono ipcell", "data-label": "IP" }, x.ip, x.new ? el("span", { class: "badge-new" }, "NEW") : null),
+      el("td", { class: "mono ipcell", "data-label": "IP" }, x.ip, x.new ? el("span", { class: "badge-new" }, "NEW") : null,
+        x.expected ? el("span", { class: "badge-list", title: "On the imported device list" }, "LIST") : null),
       el("td", { class: "mono", "data-label": "MAC" }, x.mac || "—"),
       el("td", { "data-label": "Vendor" }, x.is_self ? [el("strong", {}, "This PC"), x.name ? el("span", { class: "sub2" }, x.name) : null] : vendorCell(x)),
       el("td", { "data-label": "BACnet" }, x.bacnet_instance != null ? [
@@ -909,7 +941,9 @@ function renderDevices() {
         ? el("a", { class: "port", href: webUrl(x.ip, p), target: "_blank", rel: "noopener noreferrer" }, portLabel[p] || p)
         : el("span", { class: "port" }, portLabel[p] || p)) : "—"),
       el("td", { class: "small", "data-label": "Seen by" }, seen),
-      rollup ? el("td", { class: "small", "data-label": "Network" }, x.network || "—") : null);
+      rollup ? el("td", { class: "small netcell", "data-label": "Network" }, (x.network_links || []).length
+        ? x.network_links.flatMap((l, i) => [i ? " / " : null, el("button", { type: "button", class: "netlink", title: `Open ${l.path}`, onclick: () => goTo(l.id) }, l.path)])
+        : x.network || "—") : null);
   };
   const cols = [["IP", "ip"], ["MAC", "mac"], ["Vendor", "vendor"], ["BACnet device", "bacnet"], ["Open ports", "ports"], ["Seen by", "seen"]];
   if (rollup) cols.push(["Network", "network"]);
@@ -930,7 +964,9 @@ for (const c of document.querySelectorAll(".chip")) c.addEventListener("click", 
   renderDevices();
 });
 $("#devSearch").addEventListener("input", renderDevices);
-$("#devVendor").addEventListener("change", renderDevices);
+$("#vendAll").addEventListener("click", () => { for (const c of $("#vendorChecks").querySelectorAll("input")) { c.checked = true; state.vendors.add(c.value); } vendorLabel(); renderDevices(); });
+$("#vendNone").addEventListener("click", () => { for (const c of $("#vendorChecks").querySelectorAll("input")) c.checked = false; state.vendors.clear(); vendorLabel(); renderDevices(); });
+document.addEventListener("click", (e) => { const m = $("#devVendor"); if (m.open && !m.contains(e.target)) m.open = false; });
 $("#devNetwork").addEventListener("change", renderDevices);
 $("#devSort").addEventListener("change", (e) => { state.sort = { key: e.target.value, dir: 1 }; renderDevices(); });
 
@@ -953,15 +989,37 @@ $("#clearInactive").addEventListener("click", async () => {
 $("#devCsv").addEventListener("click", () => {
   const d = state.detail; if (!d) return;
   const rows = visibleDevices();
-  const head = ["Network", "IP", "MAC", "Vendor", "NIC maker", "BACnet instance", "Name", "Model", "Behind router", "Open ports", "Seen by", "Last seen", "Status"];
+  const head = ["Network", "IP", "MAC", "Vendor", "NIC maker", "BACnet instance", "Name", "Model", "Behind router", "Open ports", "Seen by", "Last seen", "Status", "On list"];
   const esc = (v) => { const t = v == null ? "" : String(v); return /[",\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t; };
   const lines = [head.join(",")].concat(rows.map((x) => [x.network || d.name, x.ip, x.mac, x.is_self ? "This PC" : x.vendor || "", x.mac_vendor,
     x.bacnet_instance, x.name, x.model, x.route, (x.ports || "").split(",").filter(Boolean).map((p) => portLabel[p] || p).join(" "),
-    (x.sources || "").split(",").filter((s) => s && s !== "self").join(" "), x.last_seen, x.inactive ? "inactive" : x.new ? "new" : "active"].map(esc).join(",")));
+    (x.sources || "").split(",").filter((s) => s && s !== "self").join(" "), x.last_seen,
+    x.pending ? "not checked" : x.inactive ? (x.expected && !x.last_seen ? "missing" : "inactive") : x.new ? "new" : "active", x.expected ? "yes" : ""].map(esc).join(",")));
   const blob = new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
   const a = el("a", { href: URL.createObjectURL(blob), download: `NetJoin-devices-${d.name.replace(/[^\w.-]+/g, "_")}-${new Date().toISOString().slice(0, 10)}.csv` });
   document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
   flash(`Exported ${rows.length} device(s) to CSV`);
+});
+
+// Import a list of devices that should be here: a scan then shows which are online and which are missing.
+$("#devCsvIn").addEventListener("click", () => { if (state.detail) { $("#devCsvFile").value = ""; $("#devCsvFile").click(); } });
+$("#devCsvFile").addEventListener("change", async (e) => {
+  const file = e.target.files[0]; const d = state.detail; if (!file || !d) return;
+  if (file.size > 5 * 1024 * 1024) { flash("That file is over 5 MB – is it the right one?", "error"); return; }
+  try {
+    const r = await api(`/devices/import?node_id=${d.id}`, { method: "POST", body: { csv: await file.text() } });
+    const skip = r.skipped.length ? ` · ${r.skipped.length} skipped (${[...new Set(r.skipped.map((x) => x.why))].join(", ")}; first: line ${r.skipped[0].line}${r.skipped[0].ip ? " " + r.skipped[0].ip : ""})` : "";
+    flash(`Imported ${file.name}: ${r.added} added, ${r.updated} already known${skip}. Scan to check which are online.`, r.skipped.length ? "warn" : "info");
+    state.filter = "listed";
+    for (const o of document.querySelectorAll(".chip")) { o.classList.toggle("on", o.dataset.filter === "listed"); o.setAttribute("aria-pressed", String(o.dataset.filter === "listed")); }
+    await refreshDevices(); refreshLog();
+  } catch (err) { flash(err.message, "error"); }
+});
+$("#clearExpected").addEventListener("click", async () => {
+  const d = state.detail; if (!d) return;
+  if (!confirm("Remove the imported device list? Devices never seen are removed; the rest stay as ordinary devices.")) return;
+  try { await api(`/devices/expected?node_id=${d.id}`, { method: "DELETE" }); flash("Imported list removed"); await refreshDevices(); refreshLog(); }
+  catch (err) { flash(err.message, "error"); }
 });
 
 // ---------- discover ----------

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import ipaddress
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -64,6 +65,8 @@ CREATE TABLE IF NOT EXISTS devices(
     sources TEXT,                  -- comma-separated: arp, ping, bacnet, ports, passive
     first_seen TEXT,
     last_seen TEXT,
+    expected INTEGER NOT NULL DEFAULT 0,   -- on an imported device list: should be there
+    expected_since TEXT,
     UNIQUE(subnet, key)
 );
 CREATE INDEX IF NOT EXISTS devices_subnet ON devices(subnet);
@@ -114,6 +117,9 @@ class Store:
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(devices)")}
         if "mac_vendor" not in cols:
             self.db.execute("ALTER TABLE devices ADD COLUMN mac_vendor TEXT")
+        if "expected" not in cols:     # v0.9.1: imported device lists
+            self.db.execute("ALTER TABLE devices ADD COLUMN expected INTEGER NOT NULL DEFAULT 0")
+            self.db.execute("ALTER TABLE devices ADD COLUMN expected_since TEXT")
         ncols = {r["name"] for r in self.db.execute("PRAGMA table_info(nodes)")}
         for col, ddl in (("addr_mode", "TEXT NOT NULL DEFAULT 'range'"), ("fixed_ip", "TEXT"),
                          ("alloc", "TEXT NOT NULL DEFAULT 'first'")):
@@ -441,6 +447,8 @@ class Store:
             else:
                 srcs = set(filter(None, (row["sources"] or "").split(","))) | {source}
                 upd = {"last_seen": ts, "sources": ",".join(sorted(srcs))}
+                if not row["first_seen"]:         # an imported (expected) device turning up for the first time
+                    upd["first_seen"] = ts
                 upd.update({k: v for k, v in fields.items() if v is not None})
                 if ports is not None:   # a port check replaces the old list for this device
                     upd["ports"] = ",".join(str(p) for p in sorted(ports)) or None
@@ -490,10 +498,17 @@ class Store:
         for r in rows:
             srcs = set(filter(None, (r["sources"] or "").split(",")))
             r["is_self"] = "self" in srcs
+            r["expected"] = bool(r.get("expected"))
             relevant = srcs & ACTIVE_METHODS
+            if r["expected"] and not relevant:
+                # On an imported list but never seen: any ARP / ping / BACnet scan could have found it
+                relevant = {"arp", "ping"} | ({"bacnet"} if r["bacnet_instance"] is not None else set())
             judge = next((sc for sc in scans if relevant & set(sc["methods"].split(","))), None)
+            if r["expected"] and not r["last_seen"] and judge and judge["started"] < (r["expected_since"] or ""):
+                judge = None                     # only scans after the import count for a never-seen device
             r["inactive"] = bool(judge and not r["is_self"] and (r["last_seen"] or "") < judge["started"])
-            r["new"] = bool(latest and len(scans) > 1 and not r["is_self"] and not r["inactive"]
+            r["pending"] = bool(r["expected"] and not r["last_seen"] and not judge)    # not checked yet
+            r["new"] = bool(latest and len(scans) > 1 and not r["is_self"] and not r["inactive"] and not r["expected"]
                             and (r["first_seen"] or "") >= latest["started"])
 
         def sort_key(r):
@@ -502,6 +517,105 @@ class Store:
             except ValueError:
                 return ((999,), r["key"])
         return sorted(rows, key=sort_key)
+
+    # ---------- imported device lists (CSV) ----------
+    CSV_ALIASES = {
+        "ip": ("ip", "ip address", "ipaddress", "address", "ipv4", "ip addr"),
+        "mac": ("mac", "mac address", "macaddress", "physical address", "hardware address"),
+        "name": ("name", "device name", "object name", "description", "label", "tag"),
+        "bacnet_instance": ("bacnet instance", "instance", "device instance", "device id", "bacnet id", "object instance", "instance number"),
+        "vendor": ("vendor", "manufacturer", "make", "brand"),
+        "model": ("model", "model name", "type", "product"),
+    }
+
+    def import_device_list(self, node_id: int, text: str) -> dict:
+        """Mark devices from a CSV as expected, so a scan shows which are there and which are missing.
+        Each row goes to the network (under node_id) whose subnet holds its IP. Rows already known are
+        flagged and their blank details filled in; scanned details are never overwritten."""
+        import csv, io
+        nets = self.networks_under(node_id)
+        if not nets:
+            raise StoreError("There are no networks here to import into")
+        parsed = []
+        for n in nets:
+            try:
+                parsed.append((ipcalc.parse_subnet(n["subnet"]), n))
+            except ValueError:
+                pass
+        text = text.lstrip("\ufeff")
+        sample = text[:4096]
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=",;\t")
+        except csv.Error:
+            dialect = csv.excel
+        rd = csv.reader(io.StringIO(text), dialect)
+        rows = [r for r in rd if any(c.strip() for c in r)]
+        if not rows:
+            raise StoreError("The file is empty")
+        head = [h.strip().lower().replace("_", " ") for h in rows[0]]
+        col = {}
+        for field, names in self.CSV_ALIASES.items():
+            for i, h in enumerate(head):
+                if h in names and field not in col:
+                    col[field] = i
+        if "ip" not in col:
+            raise StoreError("No IP column found – the first row needs headings, e.g. IP, Name, MAC, BACnet instance")
+        ts = now()
+        added = updated = 0
+        skipped, per_net = [], {}
+        seen_keys = set()
+        for line_no, r in enumerate(rows[1:], start=2):
+            get = lambda f: (r[col[f]].strip() if f in col and col[f] < len(r) else "") or None
+            ip = get("ip")
+            if not ip or not ipcalc.valid_ip(ip):
+                skipped.append({"line": line_no, "ip": ip or "", "why": "not a valid IP address"})
+                continue
+            addr = ipaddress.ip_address(ip)
+            hit = next((n for net, n in parsed if addr in net), None)
+            if not hit:
+                skipped.append({"line": line_no, "ip": ip, "why": "not on any network here"})
+                continue
+            if (hit["subnet"], ip) in seen_keys:
+                skipped.append({"line": line_no, "ip": ip, "why": "listed twice"})
+                continue
+            seen_keys.add((hit["subnet"], ip))
+            inst = get("bacnet_instance")
+            try:
+                inst = int(str(inst).lstrip("#")) if inst is not None else None
+            except ValueError:
+                inst = None
+            mac = get("mac")
+            if mac:
+                mac = mac.upper().replace(":", "-").replace(".", "")
+            info = {"mac": mac, "name": get("name"), "bacnet_instance": inst, "vendor": get("vendor"), "model": get("model")}
+            with self._lock:
+                row = self.db.execute("SELECT * FROM devices WHERE subnet=? AND key=?", (hit["subnet"], ip)).fetchone()
+                if row:
+                    upd = {"expected": 1}
+                    if not row["expected_since"]:
+                        upd["expected_since"] = ts
+                    upd.update({k: v for k, v in info.items() if v is not None and row[k] in (None, "")})
+                    self.db.execute(f"UPDATE devices SET {','.join(f'{k}=?' for k in upd)} WHERE id=?", (*upd.values(), row["id"]))
+                    updated += 1
+                else:
+                    cols = {"subnet": hit["subnet"], "key": ip, "ip": ip, "sources": "", "expected": 1, "expected_since": ts,
+                            **{k: v for k, v in info.items() if v is not None}}
+                    self.db.execute(f"INSERT INTO devices({','.join(cols)}) VALUES({','.join('?' * len(cols))})", tuple(cols.values()))
+                    added += 1
+                self.db.commit()
+            per_net[hit["name"]] = per_net.get(hit["name"], 0) + 1
+        return {"added": added, "updated": updated, "skipped": skipped, "networks": per_net,
+                "columns": sorted(col)}
+
+    def clear_expected(self, subnets: list[str]) -> int:
+        """Forget an imported list: never-seen rows go, seen ones stay as ordinary devices."""
+        n = 0
+        with self._lock:
+            for sn in subnets:
+                n += self.db.execute("DELETE FROM devices WHERE subnet=? AND expected=1 AND last_seen IS NULL", (sn,)).rowcount
+                n += self.db.execute("UPDATE devices SET expected=0, expected_since=NULL WHERE subnet=? AND expected=1", (sn,)).rowcount
+            self.db.commit()
+        return n
 
     def networks_under(self, node_id: int) -> list[dict]:
         """Every network at or below a node (a network gives just itself)."""
@@ -529,11 +643,14 @@ class Store:
         for n in nets:
             by_subnet.setdefault(n["subnet"], []).append(n)
         rows, last = [], None
+        depth = len(self.path_names(node_id))
         for subnet, ns in by_subnet.items():
-            names = [" › ".join(self.path_names(n["id"])[-2:]) if len(nets) > 1 else n["name"] for n in ns]
+            # Where each network is, from the page you're on: on a site "Level 2 › FCUs", on Level 2 "FCUs"
+            links = [{"id": n["id"], "path": " › ".join(self.path_names(n["id"])[depth:] or [n["name"]])} for n in ns]
             for r in self.devices(subnet):
-                r["network"] = " / ".join(names)
+                r["network"] = " / ".join(x["path"] for x in links)
                 r["network_ids"] = [n["id"] for n in ns]
+                r["network_links"] = links
                 rows.append(r)
             sc = self.scans(subnet, 1)
             if sc and (last is None or sc[0]["started"] > last["started"]):
@@ -545,7 +662,7 @@ class Store:
     def clear_inactive(self, subnets: list[str]) -> int:
         n = 0
         for subnet in subnets:
-            ids = [r["id"] for r in self.devices(subnet) if r["inactive"]]
+            ids = [r["id"] for r in self.devices(subnet) if r["inactive"] and not r["expected"]]   # keep the imported list
             if ids:
                 with self._lock:
                     n += self.db.execute(f"DELETE FROM devices WHERE id IN ({','.join('?' * len(ids))})", ids).rowcount
@@ -661,7 +778,7 @@ class Store:
     EXPORT_FIELDS = ("kind", "name", "subnet", "range_start", "range_end", "gw_override", "gateway",
                      "dns_override", "dns", "notes", "addr_mode", "fixed_ip", "alloc")
     DEVICE_FIELDS = ("key", "ip", "mac", "ping_ms", "bacnet_instance", "bacnet_vendor_id", "vendor", "mac_vendor",
-                     "name", "model", "route", "ports", "sources", "first_seen", "last_seen")
+                     "name", "model", "route", "ports", "sources", "first_seen", "last_seen", "expected", "expected_since")
 
     def export(self, node_id: int | None = None, include_devices: bool = False) -> dict:
         """Format 2. node_id = one site (plan item 1); None = everything."""
@@ -741,8 +858,9 @@ class Store:
         cols = {k: d.get(k) for k in self.DEVICE_FIELDS}
         cols["subnet"] = subnet
         cols["sources"] = ",".join(x for x in (cols.get("sources") or "").split(",") if x and x != "self") or None
-        if not cols["sources"]:
+        if not cols["sources"] and not cols.get("expected"):
             return 0                       # someone else's "This PC" row: not useful here
+        cols["expected"] = 1 if cols.get("expected") else 0
         with self._lock:
             self.db.execute(f"INSERT INTO devices({','.join(cols)}) VALUES({','.join('?' * len(cols))}) "
                             f"ON CONFLICT(subnet,key) DO UPDATE SET " + ",".join(f"{k}=excluded.{k}" for k in cols if k not in ("subnet", "key")),

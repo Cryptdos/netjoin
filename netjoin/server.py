@@ -252,6 +252,22 @@ def clear_devices(req, data):
     return {"cleared": n}
 
 
+def import_devices(req, data):
+    nid = int(req.query_params.get("node_id", 0))
+    r = eng().store.import_device_list(nid, str(data.get("csv") or ""))
+    n = eng().store.node(nid)
+    eng().log.add(f"Imported a device list into {n['name'] if n else 'network'}: {r['added']} new, {r['updated']} already known"
+                  + (f", {len(r['skipped'])} skipped" if r["skipped"] else ""))
+    return r
+
+
+def clear_expected(req, data):
+    st = eng().store
+    n = st.clear_expected(st.devices_for_node(int(req.query_params.get("node_id", 0)))["subnets"])
+    eng().log.add("Removed the imported device list")
+    return {"cleared": n}
+
+
 def history(req, data):
     return eng().store.recent_history(int(req.query_params.get("limit", 20)))
 
@@ -347,6 +363,8 @@ def build_app(engine: Engine, port: int, scans: ScanManager) -> Starlette:
         Route("/api/dhcp", api(dhcp), methods=["POST"]),
         Route("/api/rejoin", api(rejoin), methods=["POST"]),
         Route("/api/history", api(history)),
+        Route("/api/devices/import", api(import_devices), methods=["POST"]),
+        Route("/api/devices/expected", api(clear_expected), methods=["DELETE"]),
         Route("/api/apply-changes", api(apply_changes), methods=["POST"]),
         Route("/api/internet", api(internet), methods=["POST"]),
         Route("/api/home", api(home)),
